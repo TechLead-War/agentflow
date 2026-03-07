@@ -1,0 +1,12 @@
+reviewer: codex
+agent: claude
+max_rounds: 5
+max_parallel: 4
+branch_prefix: tmp/af
+cleanup_branches: true
+notify: true
+
+# Models (override if needed)
+claude_model: claude-sonnet-4-20250514
+codex_model: o3-mini
+planner_model: claude-sonnet-4-20250514
