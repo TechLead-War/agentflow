@@ -1,5 +1,7 @@
 from __future__ import annotations
+import asyncio
 import os
+import shutil
 from .base import BaseReviewer
 from ..models import ReviewResult
 
@@ -14,31 +16,78 @@ You will receive:
 Review for:
 - Correctness: does the code actually implement the task?
 - Bugs: edge cases, off-by-one errors, null/nil handling
-- Performance: anything obviously wasteful?
 - Security: injection, unsafe operations, hardcoded secrets
 - Integration: will this break existing code?
+
+IMPORTANT RULES:
+- Mark each issue as "blocker" or "suggestion"
+- "blocker" = will cause bugs, crash, break the build, or security vulnerability
+- "suggestion" = style, naming, minor improvements, nice-to-have
+- If ONLY suggestions remain and no blockers, you MUST say LGTM
+- On ROUND 2+: be MORE lenient. The agent already addressed previous feedback.
+  Only flag NEW blockers. Do NOT re-raise suggestions or style nits.
+  If the core functionality works correctly, say LGTM.
+- Do NOT ask for unnecessary changes like adding comments, docstrings, type hints,
+  error handling for impossible cases, or renaming variables for style preference.
+- Focus on: does it work? Is it correct? Will it break anything?
 
 Respond with EXACTLY one of:
 
 1. If the code is good enough to merge:
    LGTM
 
-2. If changes are needed:
+2. If changes are needed (blockers only):
    FEEDBACK:
    - Issue description (file:line if applicable) — severity: blocker|suggestion
    - ...
-
-Only use "blocker" for things that would cause bugs or break the build.
-Use "suggestion" for style, naming, or minor improvements.
-Do NOT block on suggestions alone — if only suggestions remain, say LGTM.
 """
 
 
 class CodexReviewer(BaseReviewer):
-    """Code reviewer using OpenAI API (GPT-4o / o3-mini)."""
+    """Code reviewer using Codex CLI with API fallback."""
 
     async def review(self, task_spec: str, diff: str, round_num: int,
                      previous_feedback: str | None = None) -> ReviewResult:
+        codex_bin = shutil.which("codex")
+        if codex_bin:
+            return await self._review_cli(codex_bin, task_spec, diff, round_num, previous_feedback)
+        return await self._review_api(task_spec, diff, round_num, previous_feedback)
+
+    async def _review_cli(
+        self,
+        codex_bin: str,
+        task_spec: str,
+        diff: str,
+        round_num: int,
+        previous_feedback: str | None = None,
+    ) -> ReviewResult:
+        user_content = f"TASK:\n{task_spec}\n\nDIFF:\n{diff[:12000]}\n\nROUND: {round_num}"
+        if previous_feedback:
+            user_content += f"\n\nPREVIOUS FEEDBACK (round {round_num - 1}):\n{previous_feedback}"
+
+        full_prompt = f"{REVIEW_PROMPT}\n\n{user_content}"
+
+        proc = await asyncio.create_subprocess_exec(
+            codex_bin,
+            "exec",
+            "--full-auto",
+            "-",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await proc.communicate(input=full_prompt.encode("utf-8"))
+        text = stdout.decode("utf-8", errors="replace")
+
+        if proc.returncode != 0:
+            err = stderr.decode("utf-8", errors="replace")
+            raise RuntimeError(f"Codex reviewer failed (exit {proc.returncode}): {err[:500]}")
+
+        return self._parse_response(text)
+
+    async def _review_api(self, task_spec: str, diff: str, round_num: int,
+                          previous_feedback: str | None = None) -> ReviewResult:
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI()

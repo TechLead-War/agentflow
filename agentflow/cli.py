@@ -10,6 +10,8 @@ agentflow — automated coding agents with built-in code review
 
 Usage:
   agentflow "your task description"    Run a task
+  agentflow --prompt-file <path>       Run a task from a prompt file
+  agentflow -                          Run a task from stdin
   agentflow status                     Show progress of current/last run
   agentflow log                        Show logs from last run
   agentflow resume                     Resume an interrupted run
@@ -17,6 +19,8 @@ Usage:
 
 Examples:
   agentflow "add input validation to the signup form"
+  agentflow --prompt-file /tmp/prompt.txt
+  cat /tmp/prompt.txt | agentflow -
   agentflow "refactor auth to use JWT, add rate limiting, write tests"
   agentflow config reviewer claude
   agentflow config max_rounds 3
@@ -40,10 +44,56 @@ def main():
         asyncio.run(_cmd_resume())
     elif cmd == "config":
         _cmd_config()
+    elif cmd in ("--prompt-file", "-f"):
+        if len(sys.argv) < 3:
+            print("Error: Missing prompt file path.\n")
+            print(USAGE)
+            sys.exit(1)
+        prompt = _read_prompt_file(sys.argv[2])
+        asyncio.run(_cmd_run(prompt))
+    elif cmd == "-":
+        prompt = _read_prompt_stdin()
+        asyncio.run(_cmd_run(prompt))
     else:
         # Everything else is a task prompt
         prompt = " ".join(sys.argv[1:])
         asyncio.run(_cmd_run(prompt))
+
+
+def _read_prompt_file(path_str: str) -> str:
+    path = Path(path_str)
+    if not path.exists():
+        print(f"Error: Prompt file not found: {path}")
+        sys.exit(1)
+    if not path.is_file():
+        print(f"Error: Prompt path is not a file: {path}")
+        sys.exit(1)
+
+    try:
+        prompt = path.read_text(errors="replace")
+    except OSError as e:
+        print(f"Error: Failed to read prompt file: {e}")
+        sys.exit(1)
+
+    if not prompt.strip():
+        print(f"Error: Prompt file is empty: {path}")
+        sys.exit(1)
+
+    return prompt
+
+
+def _read_prompt_stdin() -> str:
+    if sys.stdin.isatty():
+        print("Error: No stdin input provided. Pipe a prompt or use --prompt-file.\n")
+        print(USAGE)
+        sys.exit(1)
+
+    prompt = sys.stdin.read()
+    if not prompt.strip():
+        print("Error: Stdin prompt is empty.")
+        sys.exit(1)
+
+    return prompt
 
 
 async def _cmd_run(prompt: str):
@@ -64,7 +114,7 @@ async def _cmd_run(prompt: str):
     # Check prerequisites
     has_anthropic, has_openai = check_api_keys()
     if not has_anthropic and not has_openai:
-        print("Error: Set ANTHROPIC_API_KEY or OPENAI_API_KEY (or both).")
+        print("Error: Install claude/codex CLI or set ANTHROPIC_API_KEY/OPENAI_API_KEY.")
         sys.exit(1)
 
     # Warn if repo is dirty (but don't block)
@@ -77,18 +127,38 @@ async def _cmd_run(prompt: str):
 
     base_branch = git_ops.get_current_branch(cwd=repo_path)
 
+    # Initialize state early so `agentflow status` works immediately.
+    state = RunState.create(prompt, [], repo_path, base_branch)
+    state.status = "planning"
+    save_state(state)
+    print(f"Run {state.run_id} started. Use 'agentflow status' to check progress.")
+
     # --- PLAN ---
     print(f"Planning...")
     try:
         tasks = await plan(prompt, config, repo_path)
     except Exception as e:
+        state.status = "failed"
+        state.finished_at = datetime.now().isoformat()
+        save_state(state)
+        log_summary(
+            repo_path,
+            state.run_id,
+            f"# agentflow run {state.run_id}\n"
+            f"Prompt: {prompt}\n\n"
+            f"## Results\n"
+            f"  ✗ planning — failed\n"
+            f"    error: {e}\n\n"
+            f"0 merged, 1 failed",
+        )
         print(f"Planning failed: {e}")
         if stashed:
             git_ops.stash_pop(cwd=repo_path)
         sys.exit(1)
 
-    # Initialize state
-    state = RunState.create(prompt, tasks, repo_path, base_branch)
+    # Attach planned tasks and save immediately so status shows them.
+    state.tasks = tasks
+    state.status = "running"
     save_state(state)
 
     plan_data = {"prompt": prompt, "tasks": [t.to_dict() for t in tasks]}

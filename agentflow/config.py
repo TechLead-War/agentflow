@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import shutil
 import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,7 +13,7 @@ PROJECT_CONFIG = ".agentflow.yaml"
 DEFAULTS = {
     "reviewer": "codex",
     "agent": "claude",
-    "max_rounds": 5,
+    "max_rounds": 3,
     "max_parallel": 4,
     "branch_prefix": "tmp/af",
     "cleanup_branches": True,
@@ -21,6 +22,7 @@ DEFAULTS = {
     "codex_model": "o3-mini",
     "planner_model": "claude-sonnet-4-20250514",
     "context_files": [],
+    "agent_timeout_sec": 300,
 }
 
 
@@ -28,7 +30,7 @@ DEFAULTS = {
 class Config:
     reviewer: str = "codex"
     agent: str = "claude"
-    max_rounds: int = 5
+    max_rounds: int = 3
     max_parallel: int = 4
     branch_prefix: str = "tmp/af"
     cleanup_branches: bool = True
@@ -37,6 +39,7 @@ class Config:
     codex_model: str = "o3-mini"
     planner_model: str = "claude-sonnet-4-20250514"
     context_files: list[str] = field(default_factory=list)
+    agent_timeout_sec: int = 300
 
 
 def ensure_global_dir():
@@ -89,8 +92,10 @@ def set_config_value(key: str, value: str):
 
 
 def check_api_keys() -> tuple[bool, bool]:
-    """Return (has_anthropic, has_openai)."""
+    """Return (has_anthropic, has_openai) via API keys or installed CLIs."""
+    has_claude_cli = bool(shutil.which("claude"))
+    has_codex_cli = bool(shutil.which("codex"))
     return (
-        bool(os.environ.get("ANTHROPIC_API_KEY")),
-        bool(os.environ.get("OPENAI_API_KEY")),
+        bool(os.environ.get("ANTHROPIC_API_KEY")) or has_claude_cli,
+        bool(os.environ.get("OPENAI_API_KEY")) or has_codex_cli,
     )

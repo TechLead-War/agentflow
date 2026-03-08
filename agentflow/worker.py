@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import tempfile
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from .models import Task, TaskStatus, AgentType, RunState, ReviewResult
@@ -42,10 +43,20 @@ async def run_workers(
         async with semaphore:
             await _run_single_worker(task, config, state)
 
-    await asyncio.gather(
+    results = await asyncio.gather(
         *(bounded_worker(task) for task in tasks),
         return_exceptions=True,
     )
+
+    # Catch any unhandled exceptions from gather so they don't break the flow
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            task = tasks[i]
+            if task.status not in (TaskStatus.FAILED, TaskStatus.ESCALATED,
+                                   TaskStatus.APPROVED, TaskStatus.MERGED):
+                task.status = TaskStatus.FAILED
+                task.error = f"Unexpected error: {result}"
+                save_state(state)
 
 
 async def _run_single_worker(task: Task, config: Config, state: RunState):
@@ -72,6 +83,8 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
     reviewer = _get_reviewer(reviewer_type)
 
     feedback = None
+    previous_diff = None
+    timeout = getattr(config, 'agent_timeout_sec', 300)
 
     try:
         for round_num in range(1, task.max_rounds + 1):
@@ -83,7 +96,15 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
             prompt = _build_agent_prompt(task, feedback, round_num)
 
             try:
-                agent_output = await agent.run(prompt, worktree_dir)
+                agent_output = await asyncio.wait_for(
+                    agent.run(prompt, worktree_dir),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                task.status = TaskStatus.ESCALATED
+                task.error = f"Agent timed out after {timeout}s (round {round_num}). Branch preserved for manual review."
+                save_state(state)
+                return
             except Exception as e:
                 task.status = TaskStatus.FAILED
                 task.error = f"Agent error (round {round_num}): {e}"
@@ -109,12 +130,46 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
                 log_round(repo_path, state.run_id, task.id, round_num, "review",
                           "No changes detected. Skipping review.")
                 if round_num == 1:
+                    # Handle no-op tasks where the requested change already exists.
+                    if _agent_output_indicates_noop_complete(agent_output):
+                        task.status = TaskStatus.MERGED
+                        task.error = None
+                        task.feedback = "No changes required; task already satisfied."
+                        # Nothing to merge for no-op tasks.
+                        task.branch = ""
+                        save_state(state)
+                        return
+
                     task.status = TaskStatus.FAILED
                     task.error = "Agent produced no changes."
                     save_state(state)
                     return
-                # On subsequent rounds with no new changes, consider it done
-                break
+
+                # On subsequent rounds with no diff against base, treat as done.
+                task.status = TaskStatus.MERGED
+                task.error = None
+                task.feedback = "No additional changes required."
+                task.branch = ""
+                save_state(state)
+                return
+
+            # --- STALE FEEDBACK DETECTION ---
+            # If the diff hasn't meaningfully changed from last round, the agent
+            # is stuck in a loop. Auto-approve to avoid wasting cycles.
+            if previous_diff and round_num > 1:
+                similarity = SequenceMatcher(None, previous_diff, diff).ratio()
+                if similarity > 0.95:
+                    log_round(repo_path, state.run_id, task.id, round_num, "review",
+                              f"Stale loop detected (diff similarity: {similarity:.0%}). "
+                              f"Auto-approving to prevent spin.")
+                    task.status = TaskStatus.APPROVED
+                    task.feedback = (
+                        f"Auto-approved: agent made no meaningful progress after round "
+                        f"{round_num - 1}. Diff similarity {similarity:.0%}."
+                    )
+                    save_state(state)
+                    return
+            previous_diff = diff
 
             try:
                 result = await reviewer.review(
@@ -138,6 +193,16 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
                 save_state(state)
                 return
 
+            # --- CHECK: only blockers should cause another round ---
+            if round_num > 1 and not _has_blockers(result.feedback):
+                # Only suggestions remain on round 2+, good enough to merge
+                log_round(repo_path, state.run_id, task.id, round_num, "review",
+                          "Only suggestions remain after round 1. Auto-approving.")
+                task.status = TaskStatus.APPROVED
+                task.feedback = result.feedback
+                save_state(state)
+                return
+
             # --- FEEDBACK LOOP ---
             feedback = result.feedback
             update_task_status(
@@ -145,9 +210,12 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
                 round_num=round_num, feedback=feedback,
             )
 
-        # Exhausted all rounds without approval
+        # Exhausted all rounds without approval — escalate gracefully
         task.status = TaskStatus.ESCALATED
-        task.error = f"Not approved after {task.max_rounds} rounds."
+        task.error = (
+            f"Not approved after {task.max_rounds} rounds. "
+            f"Branch '{branch}' preserved for manual review."
+        )
         save_state(state)
 
     finally:
@@ -163,6 +231,17 @@ def _build_agent_prompt(task: Task, feedback: str | None, round_num: int) -> str
         f"\n{task.spec}",
     ]
 
+    # Include rationale/evidence so agent understands WHY
+    if task.rationale:
+        parts.append(
+            f"\n# Context & Rationale\n"
+            f"Understand WHY this change is needed before implementing:\n"
+            f"{task.rationale}\n"
+            f"Use this reasoning to make informed decisions. If the task says to "
+            f"change a value, consider what the rationale tells you about edge cases, "
+            f"related code, and downstream effects."
+        )
+
     if task.files:
         parts.append(f"\nFiles to create or modify:\n" +
                       "\n".join(f"  - {f}" for f in task.files))
@@ -171,13 +250,52 @@ def _build_agent_prompt(task: Task, feedback: str | None, round_num: int) -> str
         parts.append(
             f"\n# Review Feedback (Round {round_num - 1})\n"
             f"The reviewer found issues with your previous implementation. "
-            f"Fix ALL of the following:\n\n{feedback}"
+            f"Focus ONLY on fixing the blocker issues below. "
+            f"Ignore suggestions or style nits — only fix what would cause "
+            f"bugs, break the build, or violate the task requirements:\n\n{feedback}"
         )
     elif round_num == 1:
         parts.append(
             "\n# Instructions\n"
             "Implement this task completely. Edit or create the necessary files. "
-            "Make sure the code compiles and integrates with the existing codebase."
+            "Make sure the code compiles and integrates with the existing codebase. "
+            "Focus on correctness and minimal changes — do not refactor unrelated code."
         )
 
     return "\n".join(parts)
+
+
+def _has_blockers(feedback: str) -> bool:
+    """Check if the feedback contains any blocker-severity issues."""
+    if not feedback:
+        return False
+    text = feedback.lower()
+    # Look for explicit blocker markers
+    if "blocker" in text:
+        return True
+    # Look for severity indicators that suggest blocking issues
+    blocking_phrases = (
+        "will crash", "will break", "will fail",
+        "syntax error", "compilation error", "runtime error",
+        "security vulnerability", "sql injection", "xss",
+        "missing import", "undefined variable", "undefined function",
+        "type error", "null pointer", "index out of",
+        "must fix", "critical",
+    )
+    return any(phrase in text for phrase in blocking_phrases)
+
+
+def _agent_output_indicates_noop_complete(agent_output: str) -> bool:
+    """Heuristic to detect when the agent intentionally made no edits."""
+    text = (agent_output or "").lower()
+    markers = (
+        "already satisfied",
+        "already implemented",
+        "already present",
+        "already exists",
+        "no changes needed",
+        "no changes necessary",
+        "no file edits were necessary",
+        "task is already completed",
+    )
+    return any(marker in text for marker in markers)

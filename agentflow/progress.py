@@ -43,8 +43,14 @@ def show_live_progress(state: RunState):
             # Reload state from disk for latest updates
             current_state = load_state(state.repo_path) or state
 
+            status_label = current_state.status
+            task_count = len(current_state.tasks) if current_state.tasks else 0
+            title = f"agentflow — {current_state.run_id} — {status_label}"
+            if task_count:
+                title += f" — {task_count} tasks"
+
             table = Table(
-                title=f"agentflow — {current_state.run_id} — {len(current_state.tasks)} tasks",
+                title=title,
                 show_header=True,
                 header_style="bold",
                 border_style="dim",
@@ -57,6 +63,13 @@ def show_live_progress(state: RunState):
             table.add_column("Progress", width=12)
             table.add_column("Status", min_width=15)
             table.add_column("Agent", width=8, justify="center")
+
+            if not current_state.tasks:
+                table.add_row(
+                    "[dim]...[/]", "[dim]Planning tasks...[/]",
+                    "-", "", "[bold cyan]planning[/]", "-"
+                )
+                return table
 
             for task in current_state.tasks:
                 style, label = STATUS_STYLES.get(task.status, ("", str(task.status.value)))
@@ -166,6 +179,14 @@ def _print_simple_status(state: RunState):
     print(f"\nagentflow — {state.run_id} — {state.status}")
     print(f"Prompt: {state.prompt[:80]}...")
     print("-" * 50)
+
+    if state.status == "planning":
+        print("  Planning tasks... (run 'agentflow status' again to see progress)")
+        return
+
+    if not state.tasks:
+        print("  No tasks yet.")
+        return
 
     for task in state.tasks:
         _, label = STATUS_STYLES.get(task.status, ("", task.status.value))

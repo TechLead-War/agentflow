@@ -37,6 +37,7 @@ class Task:
     id: str
     title: str
     spec: str
+    rationale: str = ""
     files: list[str] = field(default_factory=list)
     depends_on: list[str] = field(default_factory=list)
     complexity: TaskComplexity = TaskComplexity.FEATURE
@@ -44,7 +45,7 @@ class Task:
     reviewer: AgentType = AgentType.CODEX
     status: TaskStatus = TaskStatus.PENDING
     current_round: int = 0
-    max_rounds: int = 5
+    max_rounds: int = 3
     branch: str = ""
     worktree_path: str = ""
     feedback: Optional[str] = None
@@ -55,6 +56,7 @@ class Task:
             "id": self.id,
             "title": self.title,
             "spec": self.spec,
+            "rationale": self.rationale,
             "files": self.files,
             "depends_on": self.depends_on,
             "complexity": self.complexity.value,
@@ -75,6 +77,7 @@ class Task:
             id=d["id"],
             title=d["title"],
             spec=d["spec"],
+            rationale=d.get("rationale", ""),
             files=d.get("files", []),
             depends_on=d.get("depends_on", []),
             complexity=TaskComplexity(d.get("complexity", "feature")),
@@ -82,7 +85,7 @@ class Task:
             reviewer=AgentType(d.get("reviewer", "codex")),
             status=TaskStatus(d.get("status", "pending")),
             current_round=d.get("current_round", 0),
-            max_rounds=d.get("max_rounds", 5),
+            max_rounds=d.get("max_rounds", 3),
             branch=d.get("branch", ""),
             worktree_path=d.get("worktree_path", ""),
             feedback=d.get("feedback"),

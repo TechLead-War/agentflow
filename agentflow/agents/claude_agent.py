@@ -18,7 +18,7 @@ class ClaudeAgent(BaseAgent):
             claude_bin,
             "-p", prompt,
             "--output-format", "text",
-            "--max-turns", "30",
+            "--max-turns", "10",
             "--dangerously-skip-permissions",
             cwd=working_dir,
             stdout=asyncio.subprocess.PIPE,

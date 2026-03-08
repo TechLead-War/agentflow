@@ -132,4 +132,3 @@ Add `.agentflow/` to your `.gitignore`.
 - Won't push to remote or open PRs — it only works locally
 - Large tasks (50+ files changed) may hit context limits — break them up
 - If the planner misjudges dependencies, you might get merge conflicts — the merger tries to resolve them automatically but may flag for human help
-- API costs are real — a complex 10-task run might cost $5-15 depending on models and rounds

@@ -1,11 +1,15 @@
 from __future__ import annotations
+import asyncio
 import json
 import os
+import shutil
 from pathlib import Path
 from .models import Task, TaskComplexity
 from .config import Config
-from .assignment import assign, AgentType
+from .assignment import assign
 from . import git_ops
+
+PLANNER_TIMEOUT_SEC = int(os.environ.get("AGENTFLOW_PLANNER_TIMEOUT_SEC", "180"))
 
 
 PLANNER_PROMPT = """\
@@ -20,6 +24,11 @@ Rules:
 - List ALL files that will be created or modified
 - Minimize dependencies between tasks — prefer independent tasks
 - Each task must be self-contained
+- For EACH task, include a "rationale" explaining WHY this change is needed,
+  what evidence or reasoning supports it, and what problem it solves. The coding
+  agent will use this to make smarter decisions (e.g., if the task says "set limit
+  to 10", the rationale should explain why 10 is the right value, what breaks
+  without it, or what user behavior/data supports it).
 
 For each task, classify complexity as one of:
   architecture — system design, new modules, major structural changes
@@ -36,6 +45,7 @@ Output ONLY valid JSON in this exact format:
       "id": "kebab-case-id",
       "title": "Short descriptive title",
       "spec": "Detailed implementation instructions. Be specific about what to change, where, and how.",
+      "rationale": "WHY this change is needed. What evidence, reasoning, or context supports this approach. What problem does it solve and what happens without it.",
       "files": ["path/to/file1.ext", "path/to/new_file.ext"],
       "depends_on": [],
       "complexity": "feature"
@@ -59,12 +69,11 @@ async def plan(prompt: str, config: Config, repo_path: str) -> list[Task]:
         user_message += f"KEY FILES:\n{context_content}\n\n"
     user_message += f"USER REQUEST:\n{prompt}"
 
-    # Detect available API keys for assignment
-    has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    has_openai = bool(os.environ.get("OPENAI_API_KEY"))
+    # Detect available providers for assignment (CLI or API)
+    has_anthropic = bool(shutil.which("claude")) or bool(os.environ.get("ANTHROPIC_API_KEY"))
+    has_openai = bool(shutil.which("codex")) or bool(os.environ.get("OPENAI_API_KEY"))
 
-    # Call planner (always uses Claude for planning — it's better at decomposition)
-    raw_tasks = await _call_planner(user_message, config)
+    raw_tasks = await _call_planner(user_message, config, repo_path)
 
     # Assign agents and reviewers based on complexity
     tasks: list[Task] = []
@@ -76,6 +85,7 @@ async def plan(prompt: str, config: Config, repo_path: str) -> list[Task]:
             id=raw["id"],
             title=raw["title"],
             spec=raw["spec"],
+            rationale=raw.get("rationale", ""),
             files=raw.get("files", []),
             depends_on=raw.get("depends_on", []),
             complexity=complexity,
@@ -88,20 +98,114 @@ async def plan(prompt: str, config: Config, repo_path: str) -> list[Task]:
     return tasks
 
 
-async def _call_planner(user_message: str, config: Config) -> list[dict]:
-    """Call the AI planner and parse its response into raw task dicts."""
+async def _call_planner(user_message: str, config: Config, repo_path: str) -> list[dict]:
+    """Call a planner backend and parse its response into task dicts."""
 
-    has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    has_openai = bool(os.environ.get("OPENAI_API_KEY"))
+    claude_bin = shutil.which("claude")
+    codex_bin = shutil.which("codex")
+    has_anthropic_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    has_openai_key = bool(os.environ.get("OPENAI_API_KEY"))
 
-    if has_anthropic:
-        return await _plan_with_claude(user_message, config.planner_model)
-    elif has_openai:
-        return await _plan_with_openai(user_message, config.codex_model)
-    else:
+    if not any((claude_bin, codex_bin, has_anthropic_key, has_openai_key)):
         raise RuntimeError(
-            "No API keys found. Set ANTHROPIC_API_KEY or OPENAI_API_KEY."
+            "No planner backend available. Install claude/codex CLI or set API keys."
         )
+
+    errors: list[str] = []
+
+    if claude_bin:
+        try:
+            return await _plan_with_claude_cli(claude_bin, user_message, config.planner_model, repo_path)
+        except Exception as e:
+            errors.append(f"claude CLI: {e}")
+
+    if codex_bin:
+        try:
+            return await _plan_with_codex_cli(codex_bin, user_message, repo_path)
+        except Exception as e:
+            errors.append(f"codex CLI: {e}")
+
+    if has_anthropic_key:
+        try:
+            return await _plan_with_claude(user_message, config.planner_model)
+        except Exception as e:
+            errors.append(f"anthropic API: {e}")
+
+    if has_openai_key:
+        try:
+            return await _plan_with_openai(user_message, config.codex_model)
+        except Exception as e:
+            errors.append(f"openai API: {e}")
+
+    raise RuntimeError("All planner backends failed: " + " | ".join(errors))
+
+
+async def _plan_with_claude_cli(
+    claude_bin: str,
+    user_message: str,
+    model: str,
+    repo_path: str,
+) -> list[dict]:
+    full_prompt = f"{PLANNER_PROMPT}\n\n{user_message}"
+
+    args = [
+        claude_bin,
+        "-p", full_prompt,
+        "--output-format", "text",
+        "--max-turns", "1",
+        "--dangerously-skip-permissions",
+    ]
+    if model:
+        args.extend(["--model", model])
+
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        cwd=repo_path,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    stdout, stderr = await _communicate_with_timeout(
+        proc,
+        timeout_sec=PLANNER_TIMEOUT_SEC,
+        label="Claude planner",
+    )
+    text = stdout.decode("utf-8", errors="replace")
+
+    if proc.returncode != 0:
+        err = stderr.decode("utf-8", errors="replace")
+        raise RuntimeError(f"Claude planner failed (exit {proc.returncode}): {err[:500]}")
+
+    return _parse_planner_response(text)
+
+
+async def _plan_with_codex_cli(codex_bin: str, user_message: str, repo_path: str) -> list[dict]:
+    full_prompt = f"{PLANNER_PROMPT}\n\n{user_message}"
+
+    proc = await asyncio.create_subprocess_exec(
+        codex_bin,
+        "exec",
+        "--full-auto",
+        "-",
+        cwd=repo_path,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    stdout, stderr = await _communicate_with_timeout(
+        proc,
+        input_data=full_prompt.encode("utf-8"),
+        timeout_sec=PLANNER_TIMEOUT_SEC,
+        label="Codex planner",
+    )
+    text = stdout.decode("utf-8", errors="replace")
+
+    if proc.returncode != 0:
+        err = stderr.decode("utf-8", errors="replace")
+        raise RuntimeError(f"Codex planner failed (exit {proc.returncode}): {err[:500]}")
+
+    return _parse_planner_response(text)
 
 
 async def _plan_with_claude(user_message: str, model: str) -> list[dict]:
@@ -185,3 +289,21 @@ def _read_context_files(context_files: list[str], repo_path: str) -> str:
             parts.append(f"--- {filename} ---\n{content}")
 
     return "\n\n".join(parts)
+
+
+async def _communicate_with_timeout(
+    proc: asyncio.subprocess.Process,
+    *,
+    timeout_sec: int,
+    label: str,
+    input_data: bytes | None = None,
+) -> tuple[bytes, bytes]:
+    try:
+        return await asyncio.wait_for(proc.communicate(input=input_data), timeout=timeout_sec)
+    except asyncio.TimeoutError:
+        proc.kill()
+        try:
+            await proc.communicate()
+        except Exception:
+            pass
+        raise RuntimeError(f"{label} timed out after {timeout_sec}s")

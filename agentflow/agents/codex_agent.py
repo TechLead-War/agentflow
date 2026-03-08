@@ -19,14 +19,16 @@ class CodexAgent(BaseAgent):
     async def _run_cli(self, codex_bin: str, prompt: str, working_dir: str) -> str:
         proc = await asyncio.create_subprocess_exec(
             codex_bin,
-            "--approval-mode", "full-auto",
-            "-q", prompt,
+            "exec",
+            "--full-auto",
+            "-",
             cwd=working_dir,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
 
-        stdout, stderr = await proc.communicate()
+        stdout, stderr = await proc.communicate(input=prompt.encode("utf-8"))
         output = stdout.decode("utf-8", errors="replace")
 
         if proc.returncode != 0:
