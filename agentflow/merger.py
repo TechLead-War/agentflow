@@ -47,10 +47,13 @@ async def merge_all(state: RunState, config: Config):
 
 async def _resolve_conflict(task: Task, state: RunState, config: Config) -> bool:
     """Attempt to auto-resolve a merge conflict using a coding agent."""
-    from .agents import ClaudeAgent
+    from .agents import ClaudeAgent, CodexAgent
 
     repo_path = state.repo_path
-    agent = ClaudeAgent()
+    if config.agent == "codex":
+        agent = CodexAgent()
+    else:
+        agent = ClaudeAgent()
 
     prompt = PromptBuilder.build_merge_prompt(
         branch=task.branch,
@@ -63,11 +66,21 @@ async def _resolve_conflict(task: Task, state: RunState, config: Config) -> bool
         git_ops.run_git(["merge", "--squash", task.branch], cwd=repo_path, check=False)
 
         await agent.run(prompt, repo_path)
+        unresolved = git_ops.run_git(
+            ["diff", "--name-only", "--diff-filter=U"],
+            cwd=repo_path,
+            check=False,
+        )
+        if unresolved.strip():
+            git_ops.run_git(["merge", "--abort"], cwd=repo_path, check=False)
+            git_ops.run_git(["reset", "--merge"], cwd=repo_path, check=False)
+            return False
+
         git_ops.commit_all(f"agentflow: resolve conflict for {task.id}", cwd=repo_path)
         return True
     except Exception:
         git_ops.run_git(["merge", "--abort"], cwd=repo_path, check=False)
-        git_ops.run_git(["reset", "--hard", "HEAD"], cwd=repo_path, check=False)
+        git_ops.run_git(["reset", "--merge"], cwd=repo_path, check=False)
         return False
 
 
@@ -76,7 +89,8 @@ def _cleanup_branches(state: RunState, config: Config):
     repo_path = state.repo_path
 
     for task in state.tasks:
-        if task.branch:
+        # Preserve branches for failed/escalated tasks so they can be inspected.
+        if task.branch and task.status == TaskStatus.MERGED:
             git_ops.delete_branch(task.branch, cwd=repo_path, force=True)
 
     git_ops.prune_worktrees(cwd=repo_path)

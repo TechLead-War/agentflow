@@ -11,7 +11,7 @@ STATE_FILE = "state.json"
 
 def get_state_dir(repo_path: str) -> Path:
     d = Path(repo_path) / AGENTFLOW_DIR
-    d.mkdir(exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True)
     return d
 
 

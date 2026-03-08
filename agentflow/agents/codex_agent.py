@@ -86,8 +86,19 @@ class CodexAgent(BaseAgent):
 
         pattern = r"=== FILE: (.+?) ===\n(.*?)\n=== END FILE ==="
         matches = re.findall(pattern, output, re.DOTALL)
+        root = Path(working_dir).resolve()
 
         for filepath, content in matches:
-            full_path = Path(working_dir) / filepath.strip()
+            rel_path = filepath.strip()
+            if not rel_path:
+                continue
+
+            full_path = (root / rel_path).resolve()
+            try:
+                full_path.relative_to(root)
+            except ValueError:
+                # Skip model output that attempts to escape the worktree.
+                continue
+
             full_path.parent.mkdir(parents=True, exist_ok=True)
-            full_path.write_text(content)
+            full_path.write_text(content, encoding="utf-8")

@@ -21,9 +21,13 @@ def _get_agent(agent_type: AgentType):
 
 def _get_reviewer(reviewer_type: AgentType | str, consistency_passes: int = 1):
     if isinstance(reviewer_type, str):
-        reviewer_type = AgentType(reviewer_type) if reviewer_type != "human" else None
-        if reviewer_type is None:
+        normalized = reviewer_type.strip().lower()
+        if normalized == "human":
             return HumanReviewer()
+        try:
+            reviewer_type = AgentType(normalized)
+        except ValueError:
+            reviewer_type = AgentType.CODEX
 
     if reviewer_type == AgentType.CLAUDE:
         return ClaudeReviewer(consistency_passes=consistency_passes)
@@ -38,6 +42,8 @@ async def run_workers(
 ):
     """Run a batch of tasks in parallel, each with its own agent-reviewer loop."""
     limit = max_parallel or config.max_parallel
+    if not isinstance(limit, int) or limit < 1:
+        limit = 1
     semaphore = asyncio.Semaphore(limit)
 
     async def bounded_worker(task: Task):
@@ -70,6 +76,17 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
     # Create branch and worktree
     worktree_dir = str(Path(tempfile.gettempdir()) / f"agentflow-{task.id}")
     try:
+        # Clean up stale worktree/branch from a previous run if present
+        if Path(worktree_dir).exists():
+            git_ops.remove_worktree(worktree_dir, cwd=repo_path)
+            if Path(worktree_dir).exists():
+                import shutil
+                shutil.rmtree(worktree_dir, ignore_errors=True)
+            git_ops.prune_worktrees(cwd=repo_path)
+
+        # Delete branch if it already exists (e.g. from a failed retry)
+        git_ops.delete_branch(branch, cwd=repo_path, force=True)
+
         git_ops.create_branch(branch, base=base_branch, cwd=repo_path)
         git_ops.create_worktree(branch, worktree_dir, cwd=repo_path)
         task.worktree_path = worktree_dir

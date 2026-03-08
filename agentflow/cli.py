@@ -148,120 +148,135 @@ async def _cmd_run(prompt: str):
     live = show_live_progress(state)
 
     try:
-        with live:
-            # --- PHASE: PLANNING ---
-            state.phase = "planning"
-            save_state(state)
+        try:
+            with live:
+                # --- PHASE: PLANNING ---
+                state.phase = "planning"
+                save_state(state)
 
-            try:
-                tasks = await plan(prompt, config, repo_path)
-            except Exception as e:
-                state.status = "failed"
-                state.phase = "failed"
+                try:
+                    tasks = await plan(prompt, config, repo_path)
+                except Exception as e:
+                    state.status = "failed"
+                    state.phase = "failed"
+                    state.finished_at = datetime.now().isoformat()
+                    save_state(state)
+                    log_summary(
+                        repo_path,
+                        state.run_id,
+                        f"# agentflow run {state.run_id}\n"
+                        f"Prompt: {prompt}\n\n"
+                        f"## Results\n"
+                        f"  \u2717 planning \u2014 failed\n"
+                        f"    error: {e}\n\n"
+                        f"0 merged, 1 failed",
+                    )
+                    # Live display will show "failed" phase on next refresh
+                    print(f"\nPlanning failed: {e}")
+                    sys.exit(1)
+
+                # Attach planned tasks — status table now shows them.
+                state.tasks = tasks
+                state.phase = "scheduling"
+                save_state(state)
+
+                plan_data = {"prompt": prompt, "tasks": [t.to_dict() for t in tasks]}
+                log_plan(repo_path, state.run_id, plan_data)
+
+                # --- PHASE: SCHEDULING ---
+                batches = schedule(tasks)
+                state.total_batches = len(batches)
+                save_state(state)
+
+                # --- PHASE: RUNNING ---
+                state.phase = "running"
+                save_state(state)
+
+                for i, batch in enumerate(batches, 1):
+                    state.current_batch = i
+                    # Mark batch tasks as queued
+                    for task in batch.tasks:
+                        task.status = TaskStatus.QUEUED
+                    save_state(state)
+
+                    await run_workers(batch.tasks, config, state)
+
+                # --- PHASE: MERGING ---
+                state.phase = "merging"
+                save_state(state)
+
+                await merge_all(state, config)
+
+                # --- PHASE: COMPLETED ---
+                state.status = "completed"
+                state.phase = "completed"
                 state.finished_at = datetime.now().isoformat()
                 save_state(state)
-                log_summary(
-                    repo_path,
-                    state.run_id,
-                    f"# agentflow run {state.run_id}\n"
-                    f"Prompt: {prompt}\n\n"
-                    f"## Results\n"
-                    f"  \u2717 planning \u2014 failed\n"
-                    f"    error: {e}\n\n"
-                    f"0 merged, 1 failed",
-                )
-                # Live display will show "failed" phase on next refresh
-                if stashed:
-                    git_ops.stash_pop(cwd=repo_path)
-                print(f"\nPlanning failed: {e}")
-                sys.exit(1)
 
-            # Attach planned tasks — status table now shows them.
-            state.tasks = tasks
-            state.phase = "scheduling"
-            save_state(state)
-
-            plan_data = {"prompt": prompt, "tasks": [t.to_dict() for t in tasks]}
-            log_plan(repo_path, state.run_id, plan_data)
-
-            # --- PHASE: SCHEDULING ---
-            batches = schedule(tasks)
-            state.total_batches = len(batches)
-            save_state(state)
-
-            # --- PHASE: RUNNING ---
-            state.phase = "running"
-            save_state(state)
-
-            for i, batch in enumerate(batches, 1):
-                state.current_batch = i
-                # Mark batch tasks as queued
-                for task in batch.tasks:
-                    task.status = TaskStatus.QUEUED
-                save_state(state)
-
-                await run_workers(batch.tasks, config, state)
-
-            # --- PHASE: MERGING ---
-            state.phase = "merging"
-            save_state(state)
-
-            await merge_all(state, config)
-
-            # --- PHASE: COMPLETED ---
-            state.status = "completed"
-            state.phase = "completed"
+        except KeyboardInterrupt:
+            state.status = "interrupted"
+            state.phase = "interrupted"
             state.finished_at = datetime.now().isoformat()
             save_state(state)
+            print("\nInterrupted. Run 'agentflow resume' to continue.")
+            sys.exit(1)
+        except Exception as e:
+            state.status = "failed"
+            state.phase = "failed"
+            state.finished_at = datetime.now().isoformat()
+            save_state(state)
+            log_summary(
+                repo_path,
+                state.run_id,
+                f"# agentflow run {state.run_id}\n"
+                f"Prompt: {prompt}\n\n"
+                f"## Results\n"
+                f"  \u2717 run \u2014 failed\n"
+                f"    error: {e}\n\n"
+                f"0 merged, 1 failed",
+            )
+            print(f"\nRun failed: {e}")
+            sys.exit(1)
 
-    except KeyboardInterrupt:
-        state.status = "interrupted"
-        state.phase = "interrupted"
-        save_state(state)
+        # --- SUMMARY ---
+        merged = [t for t in state.tasks if t.status == TaskStatus.MERGED]
+        failed = [t for t in state.tasks if t.status in (TaskStatus.FAILED, TaskStatus.ESCALATED)]
+
+        summary_lines = [
+            f"# agentflow run {state.run_id}",
+            f"Prompt: {prompt}",
+            f"",
+            f"## Results",
+        ]
+
+        for t in state.tasks:
+            icon = "\u2713" if t.status == TaskStatus.MERGED else "\u2717"
+            summary_lines.append(f"  {icon} {t.id} \u2014 {t.status.value} (rounds: {t.current_round})")
+            if t.error:
+                summary_lines.append(f"    error: {t.error}")
+
+        summary_lines.append(f"\n{len(merged)} merged, {len(failed)} failed")
+        summary = "\n".join(summary_lines)
+
+        log_summary(repo_path, state.run_id, summary)
+
+        # Print final results (outside live display)
+        print(f"\n{'=' * 50}")
+        print(f"  agentflow complete \u2014 {state.run_id}")
+        print(f"{'=' * 50}")
+        for t in state.tasks:
+            icon = "\u2713" if t.status == TaskStatus.MERGED else "\u2717"
+            print(f"  {icon} {t.id:30s}  {t.current_round} rounds   {t.status.value}")
+        print(f"\n  {len(merged)} merged, {len(failed)} failed")
+        print(f"  Logs: .agentflow/logs/{state.run_id}/")
+        print(f"{'=' * 50}")
+
+        # --- NOTIFY ---
+        notify(state)
+    finally:
+        # Restore stash no matter how the run exits.
         if stashed:
             git_ops.stash_pop(cwd=repo_path)
-        print("\nInterrupted. Run 'agentflow resume' to continue.")
-        sys.exit(1)
-
-    # --- SUMMARY ---
-    merged = [t for t in state.tasks if t.status == TaskStatus.MERGED]
-    failed = [t for t in state.tasks if t.status in (TaskStatus.FAILED, TaskStatus.ESCALATED)]
-
-    summary_lines = [
-        f"# agentflow run {state.run_id}",
-        f"Prompt: {prompt}",
-        f"",
-        f"## Results",
-    ]
-
-    for t in state.tasks:
-        icon = "\u2713" if t.status == TaskStatus.MERGED else "\u2717"
-        summary_lines.append(f"  {icon} {t.id} \u2014 {t.status.value} (rounds: {t.current_round})")
-        if t.error:
-            summary_lines.append(f"    error: {t.error}")
-
-    summary_lines.append(f"\n{len(merged)} merged, {len(failed)} failed")
-    summary = "\n".join(summary_lines)
-
-    log_summary(repo_path, state.run_id, summary)
-
-    # Print final results (outside live display)
-    print(f"\n{'=' * 50}")
-    print(f"  agentflow complete \u2014 {state.run_id}")
-    print(f"{'=' * 50}")
-    for t in state.tasks:
-        icon = "\u2713" if t.status == TaskStatus.MERGED else "\u2717"
-        print(f"  {icon} {t.id:30s}  {t.current_round} rounds   {t.status.value}")
-    print(f"\n  {len(merged)} merged, {len(failed)} failed")
-    print(f"  Logs: .agentflow/logs/{state.run_id}/")
-    print(f"{'=' * 50}")
-
-    # Restore stash if we stashed
-    if stashed:
-        git_ops.stash_pop(cwd=repo_path)
-
-    # --- NOTIFY ---
-    notify(state)
 
 
 def _cmd_status():
@@ -394,23 +409,45 @@ async def _cmd_retry():
     config = load_config(repo_path)
 
     print(f"Retrying {len(escalated)} escalated task(s)...")
+
+    # --- Clean up stale git state from previous run ---
+    # Must remove worktrees BEFORE deleting branches (git refuses to delete
+    # a branch that has an active worktree).
+    import shutil
+    import tempfile
+
+    print("Cleaning up stale branches and worktrees...")
+    git_ops.prune_worktrees(cwd=repo_path)
+
     retry_ids = {t.id for t in escalated}
     for t in escalated:
+        # Remove worktree if it still exists
+        worktree_dir = str(Path(tempfile.gettempdir()) / f"agentflow-{t.id}")
+        if Path(worktree_dir).exists():
+            git_ops.remove_worktree(worktree_dir, cwd=repo_path)
+            # If git worktree remove failed, force-remove the directory
+            if Path(worktree_dir).exists():
+                shutil.rmtree(worktree_dir, ignore_errors=True)
+
+        # Force-delete branch (unmerged branches need -D, not -d)
+        if t.branch:
+            git_ops.delete_branch(t.branch, cwd=repo_path, force=True)
+        # Also try the expected branch name in case t.branch was already cleared
+        expected_branch = f"{config.branch_prefix}-{t.id}"
+        git_ops.delete_branch(expected_branch, cwd=repo_path, force=True)
+
         # Reset task state for a fresh run
         t.status = TaskStatus.PENDING
         t.current_round = 0
         t.max_rounds = config.max_rounds
         t.error = None
         t.feedback = None
+        t.branch = ""
+        t.worktree_path = ""
         # Strip dependencies on tasks not in the retry set (already completed)
         t.depends_on = [d for d in t.depends_on if d in retry_ids]
-        # Clean up old branch so worker creates a fresh one
-        if t.branch:
-            try:
-                git_ops.delete_branch(t.branch, cwd=repo_path)
-            except Exception:
-                pass  # Branch may already be gone
-            t.branch = ""
+
+    git_ops.prune_worktrees(cwd=repo_path)
 
     state.status = "running"
     state.phase = "running"
@@ -502,16 +539,28 @@ def _cmd_clean():
 
 
 def _cmd_config():
-    from .config import set_config_value, load_config
+    from .config import set_config_value, load_config, Config
+    from . import git_ops
+
+    try:
+        repo_path = git_ops.get_repo_root(".")
+    except git_ops.GitError:
+        repo_path = "."
 
     if len(sys.argv) < 4:
         # Show current config
-        config = load_config(".")
-        for field_name, field_val in config.__dataclass_fields__.items():
+        config = load_config(repo_path)
+        for field_name in config.__dataclass_fields__:
             print(f"  {field_name}: {getattr(config, field_name)}")
         return
 
     key = sys.argv[2]
     value = sys.argv[3]
+    if key not in Config.__dataclass_fields__:
+        valid = ", ".join(sorted(Config.__dataclass_fields__.keys()))
+        print(f"Error: Unknown config key '{key}'.")
+        print(f"Valid keys: {valid}")
+        sys.exit(1)
+
     set_config_value(key, value)
     print(f"  {key} = {value}")
