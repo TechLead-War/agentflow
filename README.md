@@ -59,7 +59,7 @@ agentflow config reviewer claude
    - A coding agent implements the subtask
    - A reviewer checks the diff and gives feedback
    - The coding agent iterates until the reviewer says LGTM
-   - Max 5 rounds by default — after that it flags for human review
+   - Max 3 rounds by default — after that it flags for human review
 4. **Merger** squash-merges approved branches back into your working branch
 5. **Cleanup** deletes all temporary branches
 6. **Notifier** pings you
@@ -82,7 +82,7 @@ Global defaults live at `~/.agentflow/config.yaml` (auto-created on first run). 
 ```yaml
 # ~/.agentflow/config.yaml
 reviewer: codex          # codex | claude | human
-max_rounds: 5            # feedback iterations before escalating
+max_rounds: 3            # feedback iterations before escalating
 max_parallel: 4          # concurrent agents
 branch_prefix: tmp/af    # temp branch naming
 cleanup_branches: true   # delete branches after merge
