@@ -1,6 +1,7 @@
 from __future__ import annotations
 from .models import Task, TaskStatus, RunState
 from .config import Config
+from .prompts import PromptBuilder
 from .state import save_state
 from . import git_ops
 
@@ -51,12 +52,10 @@ async def _resolve_conflict(task: Task, state: RunState, config: Config) -> bool
     repo_path = state.repo_path
     agent = ClaudeAgent()
 
-    # Get the conflicting files
-    prompt = (
-        f"There is a merge conflict when merging branch '{task.branch}' into "
-        f"'{state.base_branch}'. The task was: {task.title}\n\n"
-        f"Resolve all merge conflicts. Keep ALL functionality from both sides. "
-        f"Do not drop any changes. After resolving, stage the files with git add."
+    prompt = PromptBuilder.build_merge_prompt(
+        branch=task.branch,
+        base=state.base_branch,
+        title=task.title,
     )
 
     try:

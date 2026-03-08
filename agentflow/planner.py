@@ -1,64 +1,31 @@
 from __future__ import annotations
 import asyncio
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
 from .models import Task, TaskComplexity
 from .config import Config
 from .assignment import assign
+from .prompts import PromptBuilder, PromptStrategy, sanitize_input, validate_planner_output
 from . import git_ops
+
+logger = logging.getLogger(__name__)
 
 PLANNER_TIMEOUT_SEC = int(os.environ.get("AGENTFLOW_PLANNER_TIMEOUT_SEC", "180"))
 
 
-PLANNER_PROMPT = """\
-You are a technical task planner. Given a codebase file structure and a user request,
-break the work into independent, atomic coding tasks.
-
-Rules:
-- Each task must be implementable independently by a single coding agent
-- If two tasks modify the same file, make one depend on the other OR restructure
-  so they touch different files
-- Be specific in the spec — the coding agent needs exact instructions
-- List ALL files that will be created or modified
-- Minimize dependencies between tasks — prefer independent tasks
-- Each task must be self-contained
-- For EACH task, include a "rationale" explaining WHY this change is needed,
-  what evidence or reasoning supports it, and what problem it solves. The coding
-  agent will use this to make smarter decisions (e.g., if the task says "set limit
-  to 10", the rationale should explain why 10 is the right value, what breaks
-  without it, or what user behavior/data supports it).
-
-For each task, classify complexity as one of:
-  architecture — system design, new modules, major structural changes
-  algorithm    — math-heavy, data structures, complex logic
-  feature      — adding functionality with clear requirements
-  bugfix       — fixing a specific broken behavior
-  refactor     — restructuring without changing behavior
-  test         — writing tests
-
-Output ONLY valid JSON in this exact format:
-{
-  "tasks": [
-    {
-      "id": "kebab-case-id",
-      "title": "Short descriptive title",
-      "spec": "Detailed implementation instructions. Be specific about what to change, where, and how.",
-      "rationale": "WHY this change is needed. What evidence, reasoning, or context supports this approach. What problem does it solve and what happens without it.",
-      "files": ["path/to/file1.ext", "path/to/new_file.ext"],
-      "depends_on": [],
-      "complexity": "feature"
-    }
-  ]
-}
-
-Do NOT include any text before or after the JSON.
-"""
-
-
 async def plan(prompt: str, config: Config, repo_path: str) -> list[Task]:
     """Break a user prompt into structured tasks using an AI planner."""
+
+    # Input guardrail: scan for prompt injection
+    prompt, injection_warnings = sanitize_input(prompt)
+    if injection_warnings:
+        logger.warning(
+            "Proceeding with prompt despite injection warnings: %s",
+            injection_warnings,
+        )
 
     # Gather codebase context
     file_tree = git_ops.get_file_tree(cwd=repo_path)
@@ -98,6 +65,15 @@ async def plan(prompt: str, config: Config, repo_path: str) -> list[Task]:
     return tasks
 
 
+def _get_planner_strategy(config: Config) -> PromptStrategy:
+    """Resolve the prompt strategy for the planner from config."""
+    raw = config.prompt_strategy
+    try:
+        return PromptStrategy(raw)
+    except ValueError:
+        return PromptStrategy.AUTO
+
+
 async def _call_planner(user_message: str, config: Config, repo_path: str) -> list[dict]:
     """Call a planner backend and parse its response into task dicts."""
 
@@ -111,29 +87,30 @@ async def _call_planner(user_message: str, config: Config, repo_path: str) -> li
             "No planner backend available. Install claude/codex CLI or set API keys."
         )
 
+    strategy = _get_planner_strategy(config)
     errors: list[str] = []
 
     if claude_bin:
         try:
-            return await _plan_with_claude_cli(claude_bin, user_message, config.planner_model, repo_path)
+            return await _plan_with_claude_cli(claude_bin, user_message, config.planner_model, repo_path, strategy)
         except Exception as e:
             errors.append(f"claude CLI: {e}")
 
     if codex_bin:
         try:
-            return await _plan_with_codex_cli(codex_bin, user_message, repo_path)
+            return await _plan_with_codex_cli(codex_bin, user_message, repo_path, strategy)
         except Exception as e:
             errors.append(f"codex CLI: {e}")
 
     if has_anthropic_key:
         try:
-            return await _plan_with_claude(user_message, config.planner_model)
+            return await _plan_with_claude(user_message, config.planner_model, strategy)
         except Exception as e:
             errors.append(f"anthropic API: {e}")
 
     if has_openai_key:
         try:
-            return await _plan_with_openai(user_message, config.codex_model)
+            return await _plan_with_openai(user_message, config.codex_model, strategy)
         except Exception as e:
             errors.append(f"openai API: {e}")
 
@@ -145,8 +122,10 @@ async def _plan_with_claude_cli(
     user_message: str,
     model: str,
     repo_path: str,
+    strategy: PromptStrategy = PromptStrategy.CHAIN_OF_THOUGHT,
 ) -> list[dict]:
-    full_prompt = f"{PLANNER_PROMPT}\n\n{user_message}"
+    planner_prompt = PromptBuilder.build_planner_prompt(strategy)
+    full_prompt = f"{planner_prompt}\n\n{user_message}"
 
     args = [
         claude_bin,
@@ -179,8 +158,14 @@ async def _plan_with_claude_cli(
     return _parse_planner_response(text)
 
 
-async def _plan_with_codex_cli(codex_bin: str, user_message: str, repo_path: str) -> list[dict]:
-    full_prompt = f"{PLANNER_PROMPT}\n\n{user_message}"
+async def _plan_with_codex_cli(
+    codex_bin: str,
+    user_message: str,
+    repo_path: str,
+    strategy: PromptStrategy = PromptStrategy.CHAIN_OF_THOUGHT,
+) -> list[dict]:
+    planner_prompt = PromptBuilder.build_planner_prompt(strategy)
+    full_prompt = f"{planner_prompt}\n\n{user_message}"
 
     proc = await asyncio.create_subprocess_exec(
         codex_bin,
@@ -208,14 +193,19 @@ async def _plan_with_codex_cli(codex_bin: str, user_message: str, repo_path: str
     return _parse_planner_response(text)
 
 
-async def _plan_with_claude(user_message: str, model: str) -> list[dict]:
+async def _plan_with_claude(
+    user_message: str,
+    model: str,
+    strategy: PromptStrategy = PromptStrategy.CHAIN_OF_THOUGHT,
+) -> list[dict]:
     from anthropic import AsyncAnthropic
 
+    planner_prompt = PromptBuilder.build_planner_prompt(strategy)
     client = AsyncAnthropic()
     response = await client.messages.create(
         model=model,
         max_tokens=4096,
-        system=PLANNER_PROMPT,
+        system=planner_prompt,
         messages=[{"role": "user", "content": user_message}],
     )
 
@@ -223,14 +213,19 @@ async def _plan_with_claude(user_message: str, model: str) -> list[dict]:
     return _parse_planner_response(text)
 
 
-async def _plan_with_openai(user_message: str, model: str) -> list[dict]:
+async def _plan_with_openai(
+    user_message: str,
+    model: str,
+    strategy: PromptStrategy = PromptStrategy.CHAIN_OF_THOUGHT,
+) -> list[dict]:
     from openai import AsyncOpenAI
 
+    planner_prompt = PromptBuilder.build_planner_prompt(strategy)
     client = AsyncOpenAI()
     response = await client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": PLANNER_PROMPT},
+            {"role": "system", "content": planner_prompt},
             {"role": "user", "content": user_message},
         ],
         max_tokens=4096,
@@ -241,34 +236,15 @@ async def _plan_with_openai(user_message: str, model: str) -> list[dict]:
 
 
 def _parse_planner_response(text: str) -> list[dict]:
-    """Extract JSON task list from planner response."""
-    text = text.strip()
+    """Extract and validate JSON task list from planner response."""
+    tasks, errors = validate_planner_output(text)
 
-    # Strip markdown code fences if present
-    if text.startswith("```"):
-        lines = text.split("\n")
-        lines = lines[1:]  # remove opening fence
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        text = "\n".join(lines)
-
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        # Try to find JSON in the response
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start >= 0 and end > start:
-            try:
-                data = json.loads(text[start:end])
-            except json.JSONDecodeError:
-                raise ValueError(f"Planner returned invalid JSON:\n{text[:500]}")
-        else:
-            raise ValueError(f"Planner returned no JSON:\n{text[:500]}")
-
-    tasks = data.get("tasks", [])
     if not tasks:
-        raise ValueError("Planner returned no tasks.")
+        error_detail = "; ".join(errors) if errors else "unknown error"
+        raise ValueError(f"Planner returned no valid tasks: {error_detail}")
+
+    if errors:
+        logger.warning("Planner output validation warnings: %s", errors)
 
     return tasks
 

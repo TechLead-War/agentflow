@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .models import Task, TaskStatus, AgentType, RunState, ReviewResult
 from .config import Config
+from .prompts import PromptBuilder, PromptStrategy
 from .state import save_state, update_task_status, log_round
 from . import git_ops
 from .agents import ClaudeAgent, CodexAgent
@@ -18,15 +19,15 @@ def _get_agent(agent_type: AgentType):
     return CodexAgent()
 
 
-def _get_reviewer(reviewer_type: AgentType | str):
+def _get_reviewer(reviewer_type: AgentType | str, consistency_passes: int = 1):
     if isinstance(reviewer_type, str):
         reviewer_type = AgentType(reviewer_type) if reviewer_type != "human" else None
         if reviewer_type is None:
             return HumanReviewer()
 
     if reviewer_type == AgentType.CLAUDE:
-        return ClaudeReviewer()
-    return CodexReviewer()
+        return ClaudeReviewer(consistency_passes=consistency_passes)
+    return CodexReviewer(consistency_passes=consistency_passes)
 
 
 async def run_workers(
@@ -80,7 +81,7 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
 
     agent = _get_agent(task.agent)
     reviewer_type = config.reviewer if config.reviewer == "human" else task.reviewer
-    reviewer = _get_reviewer(reviewer_type)
+    reviewer = _get_reviewer(reviewer_type, consistency_passes=config.review_consistency)
 
     feedback = None
     previous_diff = None
@@ -93,7 +94,11 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
             # --- AGENT PHASE ---
             update_task_status(state, task.id, TaskStatus.AGENT_WORKING, round_num=round_num)
 
-            prompt = _build_agent_prompt(task, feedback, round_num)
+            # Resolve prompt strategy from config (auto, or explicit override)
+            strategy_override = _get_strategy_override(config)
+            prompt = PromptBuilder.build_agent_prompt(
+                task, feedback, round_num, strategy_override,
+            )
 
             try:
                 agent_output = await asyncio.wait_for(
@@ -224,45 +229,15 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
         git_ops.prune_worktrees(cwd=repo_path)
 
 
-def _build_agent_prompt(task: Task, feedback: str | None, round_num: int) -> str:
-    """Build the prompt for the coding agent."""
-    parts = [
-        f"# Task: {task.title}",
-        f"\n{task.spec}",
-    ]
-
-    # Include rationale/evidence so agent understands WHY
-    if task.rationale:
-        parts.append(
-            f"\n# Context & Rationale\n"
-            f"Understand WHY this change is needed before implementing:\n"
-            f"{task.rationale}\n"
-            f"Use this reasoning to make informed decisions. If the task says to "
-            f"change a value, consider what the rationale tells you about edge cases, "
-            f"related code, and downstream effects."
-        )
-
-    if task.files:
-        parts.append(f"\nFiles to create or modify:\n" +
-                      "\n".join(f"  - {f}" for f in task.files))
-
-    if round_num > 1 and feedback:
-        parts.append(
-            f"\n# Review Feedback (Round {round_num - 1})\n"
-            f"The reviewer found issues with your previous implementation. "
-            f"Focus ONLY on fixing the blocker issues below. "
-            f"Ignore suggestions or style nits — only fix what would cause "
-            f"bugs, break the build, or violate the task requirements:\n\n{feedback}"
-        )
-    elif round_num == 1:
-        parts.append(
-            "\n# Instructions\n"
-            "Implement this task completely. Edit or create the necessary files. "
-            "Make sure the code compiles and integrates with the existing codebase. "
-            "Focus on correctness and minimal changes — do not refactor unrelated code."
-        )
-
-    return "\n".join(parts)
+def _get_strategy_override(config: Config) -> PromptStrategy | None:
+    """Resolve prompt strategy override from config."""
+    raw = config.prompt_strategy
+    if raw == "auto":
+        return None  # Let PromptBuilder auto-select based on complexity
+    try:
+        return PromptStrategy(raw)
+    except ValueError:
+        return None
 
 
 def _has_blockers(feedback: str) -> bool:

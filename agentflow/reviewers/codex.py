@@ -1,53 +1,69 @@
 from __future__ import annotations
 import asyncio
+import logging
 import os
 import shutil
 from .base import BaseReviewer
 from ..models import ReviewResult
+from ..prompts import PromptBuilder, PromptStrategy
 
-REVIEW_PROMPT = """\
-You are a senior engineer reviewing a code change. Be rigorous but fair.
-
-You will receive:
-1. TASK: what the code should accomplish
-2. DIFF: the actual code changes
-3. ROUND: which review iteration this is
-
-Review for:
-- Correctness: does the code actually implement the task?
-- Bugs: edge cases, off-by-one errors, null/nil handling
-- Security: injection, unsafe operations, hardcoded secrets
-- Integration: will this break existing code?
-
-IMPORTANT RULES:
-- Mark each issue as "blocker" or "suggestion"
-- "blocker" = will cause bugs, crash, break the build, or security vulnerability
-- "suggestion" = style, naming, minor improvements, nice-to-have
-- If ONLY suggestions remain and no blockers, you MUST say LGTM
-- On ROUND 2+: be MORE lenient. The agent already addressed previous feedback.
-  Only flag NEW blockers. Do NOT re-raise suggestions or style nits.
-  If the core functionality works correctly, say LGTM.
-- Do NOT ask for unnecessary changes like adding comments, docstrings, type hints,
-  error handling for impossible cases, or renaming variables for style preference.
-- Focus on: does it work? Is it correct? Will it break anything?
-
-Respond with EXACTLY one of:
-
-1. If the code is good enough to merge:
-   LGTM
-
-2. If changes are needed (blockers only):
-   FEEDBACK:
-   - Issue description (file:line if applicable) — severity: blocker|suggestion
-   - ...
-"""
+logger = logging.getLogger(__name__)
 
 
 class CodexReviewer(BaseReviewer):
-    """Code reviewer using Codex CLI with API fallback."""
+    """Code reviewer using Codex CLI with API fallback.
+
+    Supports self-consistency: when consistency_passes > 1, runs multiple
+    review passes and takes the majority vote on approval.
+    """
+
+    def __init__(self, consistency_passes: int = 1):
+        self.consistency_passes = consistency_passes
 
     async def review(self, task_spec: str, diff: str, round_num: int,
                      previous_feedback: str | None = None) -> ReviewResult:
+        if self.consistency_passes > 1:
+            return await self._review_with_consistency(
+                task_spec, diff, round_num, previous_feedback,
+            )
+        return await self._single_review(task_spec, diff, round_num, previous_feedback)
+
+    async def _review_with_consistency(
+        self,
+        task_spec: str,
+        diff: str,
+        round_num: int,
+        previous_feedback: str | None,
+    ) -> ReviewResult:
+        """Self-consistency: run N review passes, majority vote on approval."""
+        results = await asyncio.gather(
+            *(
+                self._single_review(task_spec, diff, round_num, previous_feedback)
+                for _ in range(self.consistency_passes)
+            ),
+            return_exceptions=True,
+        )
+
+        valid_results = [r for r in results if isinstance(r, ReviewResult)]
+        if not valid_results:
+            raise RuntimeError("All self-consistency review passes failed")
+
+        approvals = sum(1 for r in valid_results if r.approved)
+        majority_approved = approvals > len(valid_results) / 2
+
+        if majority_approved:
+            return ReviewResult(approved=True, feedback="")
+
+        all_feedback = [r.feedback for r in valid_results if not r.approved and r.feedback]
+        merged = "\n---\n".join(all_feedback) if all_feedback else ""
+        logger.info(
+            "Self-consistency: %d/%d approved, using aggregated feedback",
+            approvals, len(valid_results),
+        )
+        return ReviewResult(approved=False, feedback=merged)
+
+    async def _single_review(self, task_spec: str, diff: str, round_num: int,
+                              previous_feedback: str | None = None) -> ReviewResult:
         codex_bin = shutil.which("codex")
         if codex_bin:
             return await self._review_cli(codex_bin, task_spec, diff, round_num, previous_feedback)
@@ -61,11 +77,12 @@ class CodexReviewer(BaseReviewer):
         round_num: int,
         previous_feedback: str | None = None,
     ) -> ReviewResult:
+        review_prompt = PromptBuilder.build_review_prompt(PromptStrategy.CHAIN_OF_THOUGHT)
         user_content = f"TASK:\n{task_spec}\n\nDIFF:\n{diff[:12000]}\n\nROUND: {round_num}"
         if previous_feedback:
             user_content += f"\n\nPREVIOUS FEEDBACK (round {round_num - 1}):\n{previous_feedback}"
 
-        full_prompt = f"{REVIEW_PROMPT}\n\n{user_content}"
+        full_prompt = f"{review_prompt}\n\n{user_content}"
 
         proc = await asyncio.create_subprocess_exec(
             codex_bin,
@@ -90,6 +107,7 @@ class CodexReviewer(BaseReviewer):
                           previous_feedback: str | None = None) -> ReviewResult:
         from openai import AsyncOpenAI
 
+        review_prompt = PromptBuilder.build_review_prompt(PromptStrategy.CHAIN_OF_THOUGHT)
         client = AsyncOpenAI()
         model = os.environ.get("AGENTFLOW_CODEX_MODEL", "o3-mini")
 
@@ -100,7 +118,7 @@ class CodexReviewer(BaseReviewer):
         response = await client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": REVIEW_PROMPT},
+                {"role": "system", "content": review_prompt},
                 {"role": "user", "content": user_content},
             ],
             max_tokens=2000,
@@ -111,17 +129,14 @@ class CodexReviewer(BaseReviewer):
 
     def _parse_response(self, text: str) -> ReviewResult:
         stripped = text.strip()
-        # Check for LGTM anywhere in the response
         lines = stripped.split("\n")
         for line in lines:
             if line.strip().upper() == "LGTM":
                 return ReviewResult(approved=True, feedback="")
 
-        # If "FEEDBACK:" is present, extract it
         if "FEEDBACK:" in stripped.upper():
             idx = stripped.upper().index("FEEDBACK:")
             feedback = stripped[idx + len("FEEDBACK:"):].strip()
             return ReviewResult(approved=False, feedback=feedback)
 
-        # Ambiguous response — treat as feedback
         return ReviewResult(approved=False, feedback=stripped)

@@ -23,6 +23,8 @@ DEFAULTS = {
     "planner_model": "claude-sonnet-4-20250514",
     "context_files": [],
     "agent_timeout_sec": 300,
+    "prompt_strategy": "auto",
+    "review_consistency": 1,
 }
 
 
@@ -40,6 +42,8 @@ class Config:
     planner_model: str = "claude-sonnet-4-20250514"
     context_files: list[str] = field(default_factory=list)
     agent_timeout_sec: int = 300
+    prompt_strategy: str = "auto"
+    review_consistency: int = 1
 
 
 def ensure_global_dir():
