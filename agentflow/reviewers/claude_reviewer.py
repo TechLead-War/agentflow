@@ -139,13 +139,35 @@ class ClaudeReviewer(BaseReviewer):
 
     def _parse_response(self, text: str) -> ReviewResult:
         stripped = text.strip()
+        upper = stripped.upper()
         lines = stripped.split("\n")
+
+        # Check for explicit LGTM
         for line in lines:
             if line.strip().upper() == "LGTM":
                 return ReviewResult(approved=True, feedback="")
 
-        if "FEEDBACK:" in stripped.upper():
-            idx = stripped.upper().index("FEEDBACK:")
+        # Check for common approval phrases the reviewer might use instead of LGTM
+        approval_phrases = (
+            "lgtm", "looks good", "approved", "no issues", "no blockers",
+            "ship it", "good to merge", "ready to merge", "no problems found",
+            "no bugs found", "code is correct", "implementation is correct",
+            "changes look good", "looks correct", "well implemented",
+        )
+        # Only match if there's no FEEDBACK: section (which would indicate rejection)
+        if "FEEDBACK:" not in upper:
+            lower = stripped.lower()
+            for phrase in approval_phrases:
+                if phrase in lower:
+                    # Make sure it's not negated (e.g., "does not look good")
+                    idx = lower.index(phrase)
+                    prefix = lower[max(0, idx - 15):idx]
+                    if not any(neg in prefix for neg in ("not ", "no ", "don't ", "doesn't ", "isn't ")):
+                        return ReviewResult(approved=True, feedback="")
+
+        # Extract structured feedback
+        if "FEEDBACK:" in upper:
+            idx = upper.index("FEEDBACK:")
             feedback = stripped[idx + len("FEEDBACK:"):].strip()
             return ReviewResult(approved=False, feedback=feedback)
 

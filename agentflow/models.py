@@ -114,6 +114,9 @@ class RunState:
     base_branch: str = "main"
     repo_path: str = ""
     status: str = "running"
+    phase: str = "initializing"
+    current_batch: int = 0
+    total_batches: int = 0
     finished_at: Optional[str] = None
 
     @classmethod
@@ -137,6 +140,9 @@ class RunState:
             "base_branch": self.base_branch,
             "repo_path": self.repo_path,
             "status": self.status,
+            "phase": self.phase,
+            "current_batch": self.current_batch,
+            "total_batches": self.total_batches,
             "finished_at": self.finished_at,
         }
 
@@ -150,5 +156,8 @@ class RunState:
             base_branch=d.get("base_branch", "main"),
             repo_path=d.get("repo_path", ""),
             status=d.get("status", "running"),
+            phase=d.get("phase", "initializing"),
+            current_batch=d.get("current_batch", 0),
+            total_batches=d.get("total_batches", 0),
             finished_at=d.get("finished_at"),
         )

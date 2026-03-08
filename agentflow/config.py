@@ -13,7 +13,7 @@ PROJECT_CONFIG = ".agentflow.yaml"
 DEFAULTS = {
     "reviewer": "codex",
     "agent": "claude",
-    "max_rounds": 3,
+    "max_rounds": 5,
     "max_parallel": 4,
     "branch_prefix": "tmp/af",
     "cleanup_branches": True,
@@ -32,7 +32,7 @@ DEFAULTS = {
 class Config:
     reviewer: str = "codex"
     agent: str = "claude"
-    max_rounds: int = 3
+    max_rounds: int = 5
     max_parallel: int = 4
     branch_prefix: str = "tmp/af"
     cleanup_branches: bool = True

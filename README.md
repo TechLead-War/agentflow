@@ -46,8 +46,11 @@ agentflow log
 # Pick up an interrupted run
 agentflow resume
 
+# Re-run escalated tasks with fresh rounds
+agentflow retry
+
 # Change a default
-agentflow config max_rounds 3
+agentflow config max_rounds 5
 agentflow config reviewer claude
 ```
 
@@ -59,7 +62,8 @@ agentflow config reviewer claude
    - A coding agent implements the subtask
    - A reviewer checks the diff and gives feedback
    - The coding agent iterates until the reviewer says LGTM
-   - Max 3 rounds by default — after that it flags for human review
+   - Max 5 rounds by default — after that it escalates for human review
+   - Run `agentflow retry` to re-attempt escalated tasks
 4. **Merger** squash-merges approved branches back into your working branch
 5. **Cleanup** deletes all temporary branches
 6. **Notifier** pings you
@@ -75,17 +79,49 @@ The planner classifies each subtask and picks the best AI for the job:
 
 Cross-review means the reviewer has a different perspective than the coder. Catches more issues.
 
+### Task statuses
+
+Each subtask moves through these statuses during a run:
+
+| Status | Meaning |
+|---|---|
+| `pending` | Task created, not yet scheduled |
+| `queued` | Scheduled in a batch, waiting for a worker slot |
+| `agent_working` | Coding agent is implementing the task |
+| `reviewing` | Reviewer is checking the diff |
+| `iterating` | Agent received feedback, working on fixes |
+| `approved` | Reviewer said LGTM, ready to merge |
+| `merging` | Being merged into the base branch |
+| `merged` | Successfully merged — done |
+| `escalated` | Not approved after max rounds, timed out, or hit a merge conflict. Branch preserved for manual review. Run `agentflow retry` to re-attempt. |
+| `failed` | Unrecoverable error (agent crash, no changes produced) |
+
+### Review approach
+
+The reviewer acts as a **spec compliance checker**, not a traditional code reviewer. It only checks two things:
+
+1. Does the diff implement every requirement in the task spec?
+2. Will the code crash (missing import, syntax error)?
+
+It does not flag style, naming, edge cases not in the spec, performance, or "better" approaches. If the spec is satisfied, the reviewer approves. This keeps the feedback loop tight and avoids unnecessary escalations.
+
 ## Configuration
 
 Global defaults live at `~/.agentflow/config.yaml` (auto-created on first run). You can override per-project by adding `.agentflow.yaml` to your repo root.
 
 ```yaml
 # ~/.agentflow/config.yaml
-reviewer: codex          # codex | claude | human
-max_rounds: 3            # feedback iterations before escalating
-max_parallel: 4          # concurrent agents
-branch_prefix: tmp/af    # temp branch naming
-cleanup_branches: true   # delete branches after merge
+reviewer: codex              # codex | claude | human
+agent: claude                # codex | claude
+max_rounds: 5               # feedback iterations before escalating
+max_parallel: 4              # concurrent agents
+branch_prefix: tmp/af        # temp branch naming
+cleanup_branches: true       # delete branches after merge
+agent_timeout_sec: 300       # seconds before agent times out (escalates)
+prompt_strategy: auto        # auto | zero_shot | few_shot | chain_of_thought | tree_of_thoughts
+review_consistency: 1        # number of review passes (majority vote when >1)
+claude_model: claude-sonnet-4-20250514
+codex_model: o3-mini
 ```
 
 Project-level overrides:
@@ -93,7 +129,7 @@ Project-level overrides:
 ```yaml
 # your-repo/.agentflow.yaml
 reviewer: claude
-max_rounds: 3
+max_rounds: 5
 context_files:
   - README.md
   - ARCHITECTURE.md

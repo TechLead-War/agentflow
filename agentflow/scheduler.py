@@ -143,7 +143,11 @@ def _max_depth(deps: dict[str, set[str]]) -> int:
         if not task_deps:
             memo[tid] = 1
             return 1
-        d = 1 + max(depth(dep) for dep in task_deps if dep in deps or dep == tid)
+        reachable = [dep for dep in task_deps if dep in deps]
+        if not reachable:
+            memo[tid] = 1
+            return 1
+        d = 1 + max(depth(dep) for dep in reachable)
         memo[tid] = d
         return d
 
@@ -165,6 +169,12 @@ def _topo_batch(tasks: list[Task], deps: dict[str, set[str]]) -> list[Batch]:
     completed: set[str] = set()
     batches: list[Batch] = []
     order = 0
+
+    # Treat deps referencing tasks outside the set as already satisfied
+    external = set()
+    for d in deps.values():
+        external.update(d - remaining)
+    completed.update(external)
 
     while remaining:
         # Find tasks with all dependencies satisfied

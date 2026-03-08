@@ -15,6 +15,8 @@ Usage:
   agentflow status                     Show progress of current/last run
   agentflow log                        Show logs from last run
   agentflow resume                     Resume an interrupted run
+  agentflow retry                      Retry escalated tasks with fresh rounds
+  agentflow clean                      Clear state from previous runs
   agentflow config <key> <value>       Set a configuration value
 
 Examples:
@@ -23,7 +25,7 @@ Examples:
   cat /tmp/prompt.txt | agentflow -
   agentflow "refactor auth to use JWT, add rate limiting, write tests"
   agentflow config reviewer claude
-  agentflow config max_rounds 3
+  agentflow config max_rounds 5
 """
 
 
@@ -42,6 +44,10 @@ def main():
         _cmd_log()
     elif cmd == "resume":
         asyncio.run(_cmd_resume())
+    elif cmd == "retry":
+        asyncio.run(_cmd_retry())
+    elif cmd == "clean":
+        _cmd_clean()
     elif cmd == "config":
         _cmd_config()
     elif cmd in ("--prompt-file", "-f"):
@@ -104,7 +110,7 @@ async def _cmd_run(prompt: str):
     from .merger import merge_all
     from .notifier import notify
     from .progress import show_live_progress
-    from .state import save_state, log_plan, log_summary
+    from .state import load_state, save_state, log_plan, log_summary
     from .models import RunState, TaskStatus
     from . import git_ops
 
@@ -117,6 +123,11 @@ async def _cmd_run(prompt: str):
         print("Error: Install claude/codex CLI or set ANTHROPIC_API_KEY/OPENAI_API_KEY.")
         sys.exit(1)
 
+    # Detect and clean stale runs
+    prev_state = load_state(repo_path)
+    if prev_state and prev_state.status not in ("completed", "failed"):
+        print(f"Clearing previous run {prev_state.run_id} ({prev_state.status}).")
+
     # Warn if repo is dirty (but don't block)
     if not git_ops.is_clean(cwd=repo_path):
         print("Warning: Working tree has uncommitted changes. Stashing them.")
@@ -127,91 +138,92 @@ async def _cmd_run(prompt: str):
 
     base_branch = git_ops.get_current_branch(cwd=repo_path)
 
-    # Initialize state early so `agentflow status` works immediately.
+    # Initialize state immediately so `agentflow status` works from second 0.
     state = RunState.create(prompt, [], repo_path, base_branch)
-    state.status = "planning"
-    save_state(state)
-    print(f"Run {state.run_id} started. Use 'agentflow status' to check progress.")
-
-    # --- PLAN ---
-    print(f"Planning...")
-    try:
-        tasks = await plan(prompt, config, repo_path)
-    except Exception as e:
-        state.status = "failed"
-        state.finished_at = datetime.now().isoformat()
-        save_state(state)
-        log_summary(
-            repo_path,
-            state.run_id,
-            f"# agentflow run {state.run_id}\n"
-            f"Prompt: {prompt}\n\n"
-            f"## Results\n"
-            f"  ✗ planning — failed\n"
-            f"    error: {e}\n\n"
-            f"0 merged, 1 failed",
-        )
-        print(f"Planning failed: {e}")
-        if stashed:
-            git_ops.stash_pop(cwd=repo_path)
-        sys.exit(1)
-
-    # Attach planned tasks and save immediately so status shows them.
-    state.tasks = tasks
     state.status = "running"
+    state.phase = "initializing"
     save_state(state)
 
-    plan_data = {"prompt": prompt, "tasks": [t.to_dict() for t in tasks]}
-    log_plan(repo_path, state.run_id, plan_data)
-
-    # Show plan summary
-    print(f"\n  {len(tasks)} task(s) planned:\n")
-    for t in tasks:
-        agent_label = t.agent.value
-        reviewer_label = t.reviewer.value
-        print(f"    {t.id:30s}  agent={agent_label:6s}  reviewer={reviewer_label:6s}  [{t.complexity.value}]")
-    print()
-
-    # --- SCHEDULE ---
-    batches = schedule(tasks)
-
-    # --- EXECUTE ---
+    # Start the live display NOW — it covers the entire lifecycle.
     live = show_live_progress(state)
 
     try:
         with live:
-            for batch in batches:
+            # --- PHASE: PLANNING ---
+            state.phase = "planning"
+            save_state(state)
+
+            try:
+                tasks = await plan(prompt, config, repo_path)
+            except Exception as e:
+                state.status = "failed"
+                state.phase = "failed"
+                state.finished_at = datetime.now().isoformat()
+                save_state(state)
+                log_summary(
+                    repo_path,
+                    state.run_id,
+                    f"# agentflow run {state.run_id}\n"
+                    f"Prompt: {prompt}\n\n"
+                    f"## Results\n"
+                    f"  \u2717 planning \u2014 failed\n"
+                    f"    error: {e}\n\n"
+                    f"0 merged, 1 failed",
+                )
+                # Live display will show "failed" phase on next refresh
+                if stashed:
+                    git_ops.stash_pop(cwd=repo_path)
+                print(f"\nPlanning failed: {e}")
+                sys.exit(1)
+
+            # Attach planned tasks — status table now shows them.
+            state.tasks = tasks
+            state.phase = "scheduling"
+            save_state(state)
+
+            plan_data = {"prompt": prompt, "tasks": [t.to_dict() for t in tasks]}
+            log_plan(repo_path, state.run_id, plan_data)
+
+            # --- PHASE: SCHEDULING ---
+            batches = schedule(tasks)
+            state.total_batches = len(batches)
+            save_state(state)
+
+            # --- PHASE: RUNNING ---
+            state.phase = "running"
+            save_state(state)
+
+            for i, batch in enumerate(batches, 1):
+                state.current_batch = i
                 # Mark batch tasks as queued
                 for task in batch.tasks:
                     task.status = TaskStatus.QUEUED
                 save_state(state)
 
-                # Update display
-                if hasattr(live, 'update'):
-                    live.update(live.renderable if hasattr(live, 'renderable') else None)
-
                 await run_workers(batch.tasks, config, state)
 
-                if hasattr(live, 'update'):
-                    live.update(live.renderable if hasattr(live, 'renderable') else None)
+            # --- PHASE: MERGING ---
+            state.phase = "merging"
+            save_state(state)
+
+            await merge_all(state, config)
+
+            # --- PHASE: COMPLETED ---
+            state.status = "completed"
+            state.phase = "completed"
+            state.finished_at = datetime.now().isoformat()
+            save_state(state)
 
     except KeyboardInterrupt:
-        print("\nInterrupted. Run 'agentflow resume' to continue.")
         state.status = "interrupted"
+        state.phase = "interrupted"
         save_state(state)
         if stashed:
             git_ops.stash_pop(cwd=repo_path)
+        print("\nInterrupted. Run 'agentflow resume' to continue.")
         sys.exit(1)
 
-    # --- MERGE ---
-    print("\nMerging approved branches...")
-    await merge_all(state, config)
-
     # --- SUMMARY ---
-    state.status = "completed"
-    state.finished_at = datetime.now().isoformat()
-    save_state(state)
-
     merged = [t for t in state.tasks if t.status == TaskStatus.MERGED]
     failed = [t for t in state.tasks if t.status in (TaskStatus.FAILED, TaskStatus.ESCALATED)]
 
@@ -223,8 +235,8 @@ async def _cmd_run(prompt: str):
     ]
 
     for t in state.tasks:
-        icon = "✓" if t.status == TaskStatus.MERGED else "✗"
-        summary_lines.append(f"  {icon} {t.id} — {t.status.value} (rounds: {t.current_round})")
+        icon = "\u2713" if t.status == TaskStatus.MERGED else "\u2717"
+        summary_lines.append(f"  {icon} {t.id} \u2014 {t.status.value} (rounds: {t.current_round})")
         if t.error:
             summary_lines.append(f"    error: {t.error}")
 
@@ -233,15 +245,16 @@ async def _cmd_run(prompt: str):
 
     log_summary(repo_path, state.run_id, summary)
 
-    # Print results
-    print("\n" + "=" * 50)
-    print(f"  agentflow complete")
-    print("=" * 50)
+    # Print final results (outside live display)
+    print(f"\n{'=' * 50}")
+    print(f"  agentflow complete \u2014 {state.run_id}")
+    print(f"{'=' * 50}")
     for t in state.tasks:
-        icon = "✓" if t.status == TaskStatus.MERGED else "✗"
+        icon = "\u2713" if t.status == TaskStatus.MERGED else "\u2717"
         print(f"  {icon} {t.id:30s}  {t.current_round} rounds   {t.status.value}")
-    print(f"\n  Logs: .agentflow/logs/{state.run_id}/")
-    print("=" * 50)
+    print(f"\n  {len(merged)} merged, {len(failed)} failed")
+    print(f"  Logs: .agentflow/logs/{state.run_id}/")
+    print(f"{'=' * 50}")
 
     # Restore stash if we stashed
     if stashed:
@@ -347,6 +360,145 @@ async def _cmd_resume():
 
     notify(state)
     print("Resume complete.")
+
+
+async def _cmd_retry():
+    from .config import load_config
+    from .scheduler import schedule
+    from .worker import run_workers
+    from .merger import merge_all
+    from .notifier import notify
+    from .progress import show_live_progress
+    from .state import load_state, save_state, log_summary
+    from .models import TaskStatus
+    from . import git_ops
+
+    try:
+        repo_path = git_ops.get_repo_root(".")
+    except git_ops.GitError:
+        print("Not in a git repository.")
+        sys.exit(1)
+
+    state = load_state(repo_path)
+    if state is None:
+        print("No run to retry.")
+        sys.exit(1)
+
+    # Find escalated tasks
+    escalated = [t for t in state.tasks if t.status == TaskStatus.ESCALATED]
+
+    if not escalated:
+        print("No escalated tasks to retry.")
+        sys.exit(0)
+
+    config = load_config(repo_path)
+
+    print(f"Retrying {len(escalated)} escalated task(s)...")
+    retry_ids = {t.id for t in escalated}
+    for t in escalated:
+        # Reset task state for a fresh run
+        t.status = TaskStatus.PENDING
+        t.current_round = 0
+        t.max_rounds = config.max_rounds
+        t.error = None
+        t.feedback = None
+        # Strip dependencies on tasks not in the retry set (already completed)
+        t.depends_on = [d for d in t.depends_on if d in retry_ids]
+        # Clean up old branch so worker creates a fresh one
+        if t.branch:
+            try:
+                git_ops.delete_branch(t.branch, cwd=repo_path)
+            except Exception:
+                pass  # Branch may already be gone
+            t.branch = ""
+
+    state.status = "running"
+    state.phase = "running"
+    state.finished_at = None
+    save_state(state)
+
+    live = show_live_progress(state)
+
+    try:
+        with live:
+            batches = schedule(escalated)
+            state.total_batches = len(batches)
+
+            for i, batch in enumerate(batches, 1):
+                state.current_batch = i
+                for task in batch.tasks:
+                    task.status = TaskStatus.QUEUED
+                save_state(state)
+
+                await run_workers(batch.tasks, config, state)
+
+            # Merge any newly approved tasks
+            state.phase = "merging"
+            save_state(state)
+
+            await merge_all(state, config)
+
+            state.status = "completed"
+            state.phase = "completed"
+            state.finished_at = datetime.now().isoformat()
+            save_state(state)
+
+    except KeyboardInterrupt:
+        state.status = "interrupted"
+        state.phase = "interrupted"
+        save_state(state)
+        print("\nInterrupted. Run 'agentflow retry' again to continue.")
+        sys.exit(1)
+
+    # Summary
+    merged = [t for t in state.tasks if t.status == TaskStatus.MERGED]
+    still_escalated = [t for t in state.tasks if t.status == TaskStatus.ESCALATED]
+    failed = [t for t in state.tasks if t.status == TaskStatus.FAILED]
+
+    print(f"\n{'=' * 50}")
+    print(f"  agentflow retry complete")
+    print(f"{'=' * 50}")
+    for t in escalated:
+        icon = "\u2713" if t.status in (TaskStatus.MERGED, TaskStatus.APPROVED) else "\u2717"
+        print(f"  {icon} {t.id:30s}  {t.current_round} rounds   {t.status.value}")
+    print(f"\n  {len(merged)} total merged, {len(still_escalated)} still escalated, {len(failed)} failed")
+    print(f"{'=' * 50}")
+
+    notify(state)
+
+
+def _cmd_clean():
+    from .state import load_state, get_state_dir
+    from . import git_ops
+    import shutil
+
+    try:
+        repo_path = git_ops.get_repo_root(".")
+    except git_ops.GitError:
+        repo_path = "."
+
+    state = load_state(repo_path)
+    if state is None:
+        print("Nothing to clean.")
+        return
+
+    state_dir = get_state_dir(repo_path)
+    state_file = state_dir / "state.json"
+
+    print(f"Clearing run {state.run_id} (status: {state.status})")
+
+    # Remove state file
+    if state_file.exists():
+        state_file.unlink()
+
+    # Remove logs if --logs flag passed
+    if len(sys.argv) > 2 and sys.argv[2] == "--logs":
+        log_dir = state_dir / "logs" / state.run_id
+        if log_dir.exists():
+            shutil.rmtree(log_dir)
+            print(f"Removed logs: {log_dir}")
+
+    print("Done. Ready for a new run.")
 
 
 def _cmd_config():

@@ -250,12 +250,35 @@ def _has_blockers(feedback: str) -> bool:
         return True
     # Look for severity indicators that suggest blocking issues
     blocking_phrases = (
-        "will crash", "will break", "will fail",
-        "syntax error", "compilation error", "runtime error",
-        "security vulnerability", "sql injection", "xss",
+        # Crash / break indicators
+        "will crash", "will break", "will fail", "would crash", "would break",
+        "would fail", "causes crash", "causes failure",
+        # Compilation / syntax
+        "syntax error", "compilation error", "compile error", "won't compile",
+        "does not compile", "parse error",
+        # Runtime errors
+        "runtime error", "throws exception", "unhandled exception",
+        "stack overflow", "infinite loop", "deadlock",
+        # Security
+        "security vulnerability", "sql injection", "xss", "path traversal",
+        "command injection", "insecure",
+        # Reference errors
         "missing import", "undefined variable", "undefined function",
-        "type error", "null pointer", "index out of",
-        "must fix", "critical",
+        "undeclared", "not defined", "name error", "reference error",
+        "module not found", "import error",
+        # Type errors
+        "type error", "type mismatch", "wrong type", "incompatible type",
+        # Null / bounds
+        "null pointer", "nil pointer", "none type", "nonetype",
+        "index out of", "out of bounds", "key error", "index error",
+        # Logic errors
+        "incorrect logic", "wrong result", "incorrect result",
+        "logic error", "off-by-one", "data loss", "data corruption",
+        "race condition",
+        # Explicit severity
+        "must fix", "critical", "severity: blocker", "breaking change",
+        "this won't work", "this doesn't work", "this is broken",
+        "fundamentally wrong", "completely wrong",
     )
     return any(phrase in text for phrase in blocking_phrases)
 
