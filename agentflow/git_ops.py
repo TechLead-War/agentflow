@@ -22,6 +22,24 @@ class GitError(Exception):
     pass
 
 
+def has_commits(cwd: str = ".") -> bool:
+    """Check if the repository has any commits."""
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def ensure_initial_commit(cwd: str = "."):
+    """Create an initial empty commit if the repo has none."""
+    if not has_commits(cwd):
+        run_git(["commit", "--allow-empty", "-m", "Initial commit (agentflow)"], cwd=cwd)
+
+
 def get_repo_root(cwd: str = ".") -> str:
     """Get the root of the current git repository."""
     return run_git(["rev-parse", "--show-toplevel"], cwd=cwd)
@@ -29,6 +47,9 @@ def get_repo_root(cwd: str = ".") -> str:
 
 def get_current_branch(cwd: str = ".") -> str:
     """Get the currently checked-out branch name."""
+    if not has_commits(cwd):
+        # On an empty repo, rev-parse fails; use symbolic-ref instead.
+        return run_git(["symbolic-ref", "--short", "HEAD"], cwd=cwd)
     return run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd)
 
 

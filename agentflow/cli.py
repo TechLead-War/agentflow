@@ -115,6 +115,7 @@ async def _cmd_run(prompt: str):
     from . import git_ops
 
     repo_path = git_ops.get_repo_root(".")
+    git_ops.ensure_initial_commit(cwd=repo_path)
     config = load_config(repo_path)
 
     # Check prerequisites
