@@ -145,7 +145,7 @@ async def _plan_with_claude_cli(
         claude_bin,
         "-p", full_prompt,
         "--output-format", "text",
-        "--max-turns", "1",
+        "--max-turns", "3",
         "--dangerously-skip-permissions",
     ]
     if model:

@@ -1,13 +1,13 @@
 {
-  "run_id": "20260329_175807",
-  "started_at": "2026-03-29T17:58:07.094961",
+  "run_id": "20260329_182648_955416",
+  "started_at": "2026-03-29T18:26:48.955416",
   "prompt": "can you see if readme file is all upto date.",
   "tasks": [
     {
-      "id": "refresh-readme-for-current-cli-and-workflow",
-      "title": "Refresh README to match the current CLI and runtime behavior",
-      "spec": "Audit `README.md` against the live implementation in `agentflow/cli.py`, `agentflow/config.py`, `ARCHITECTURE.md`, `pyproject.toml`, and `setup.py`, then rewrite the README sections that have drifted. Update the usage section so it documents every current entry point (`agentflow \"task\"`, `agentflow --prompt-file <path>`, `agentflow -`, `status`, `log`, `resume`, `retry`, `clean`, and `config`) and include the important `agentflow clean --logs` behavior. Refresh the workflow description so it matches the actual runtime order: repo analysis, optional complexity gate, optional research, planning, scheduling, worker/reviewer rounds, merging, optional validation with one automatic fix task, cleanup, and notification. Correct prerequisites to reflect that either installed CLIs or API keys satisfy provider availability, not API keys only. Expand the configuration section so the documented keys match the current config surface, including `notify`, `planner_model`, `research_enabled`, `research_model`, `research_max_files`, and `validation_enabled`, and make sure allowed `prompt_strategy` values are accurate. Keep the README concise and user-facing, but remove outdated or incomplete claims so a new user can rely on it without reading the code.",
-      "rationale": "This request is a documentation audit, and the drift is localized to the README. The current README omits real CLI entry points (`--prompt-file`, stdin, `clean`), misses `clean --logs`, understates the runtime pipeline by leaving out the gate/research/validation phases, and documents an older configuration surface. It also implies API keys are the only prerequisite even though the code accepts installed `claude` and `codex` CLIs. Because the affected behavior is all part of the same product surface and the change should only touch the main user-facing document, a single docs bugfix task is the right size and avoids unnecessary task coordination.",
+      "id": "audit-and-refresh-readme",
+      "title": "Audit README against current CLI and workflow",
+      "spec": "Review README.md against the current implementation and update it so every user-facing claim matches the code. Use agenthub/cli.py as the source of truth for commands and flags, agenthub/config.py for config keys and defaults, agenthub/models.py plus agenthub/progress.py for task statuses and runtime phases, agenthub/researcher.py and agenthub/validator.py for the research and validation phases, agenthub/notifier.py for notification behavior, and agenthub/state.py for log artifacts. In README.md, fix stale defaults such as `branch_prefix`, document the full command surface (`--prompt-file` and `-f`, stdin `-`, `status`, `log`, `resume`, `retry`, `clean`, `clean --logs`, and `config`), update prerequisites to mention installed `claude` or `codex` CLIs as valid backends in addition to API keys, refresh the workflow description to include complexity gating, optional research, scheduling, validation, rollback and safe-branch behavior on validation failure, and cleanup semantics, replace the outdated reviewer description with the current 8-check review model, expand the configuration section to cover all current keys and defaults, and refresh the logs section to reflect `plan.json`, `research.json`, `validation-*.json`, task round logs, and `summary.md`. Keep the README concise and user-facing, and do not change runtime code.",
+      "rationale": "This is a single documentation-maintenance change centered on README.md. The README is materially stale in several concrete places: it documents `branch_prefix: tmp/af` even though agenthub/config.py defaults to `tmp/ah`; it omits user-facing commands implemented in agenthub/cli.py such as `clean` and the `--logs` cleanup mode; it frames prerequisites as API-key-only even though `check_api_keys()` accepts installed `claude` and `codex` CLIs; it describes review as a narrow spec-compliance check even though agenthub/models.py and the reviewer prompts now enforce an 8-check rubric; and it does not explain the current research and validation phases or the newer config surface added for them. Leaving these mismatches in place will mislead users about how to run, configure, and trust the tool. A single senior engineer can audit and refresh this file in one sitting, so splitting it would add coordination overhead without improving quality.",
       "files": [
         "README.md"
       ],
@@ -15,22 +15,22 @@
       "complexity": "bugfix",
       "agent": "claude",
       "reviewer": "codex",
-      "status": "escalated",
+      "status": "merged",
       "current_round": 2,
       "max_rounds": 5,
-      "branch": "tmp/ah-refresh-readme-for-current-cli-and-workflow",
-      "worktree_path": "/var/folders/v3/dzfc_vcd5bqf618x5xmqg0s00000gn/T/agenthub-refresh-readme-for-current-cli-and-workflow",
-      "feedback": "Escalated: agent made no meaningful progress after round 1. Diff similarity 98%.",
-      "error": "Stale retry loop detected on round 2. Branch preserved for manual review."
+      "branch": "tmp/ah-audit-and-refresh-readme",
+      "worktree_path": "/var/folders/v3/dzfc_vcd5bqf618x5xmqg0s00000gn/T/agenthub-audit-and-refresh-readme",
+      "feedback": null,
+      "error": null
     }
   ],
   "base_branch": "main",
-  "base_sha": "60042454acd14dd0cba55e370dccdb5797e95fa5",
+  "base_sha": "abaaa2b263cc963bd47e3fd1fb96644bc987a1c0",
   "repo_path": "/Users/primetrace/Desktop/RnD/agentflow",
   "status": "completed",
   "phase": "completed",
   "current_batch": 1,
   "total_batches": 1,
   "validation_attempt": 1,
-  "finished_at": "2026-03-29T18:06:28.056432"
+  "finished_at": "2026-03-29T18:40:07.961478"
 }
