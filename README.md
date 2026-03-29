@@ -6,7 +6,7 @@ Automated coding agents with built-in code review. Give it a task in plain Engli
 agenthub "add rate limiting to all API endpoints"
 ```
 
-It reads your codebase, splits the work into subtasks, spins up coding agents on separate branches, has each one reviewed by a second AI, iterates on feedback until approved, merges everything, cleans up the branches, and notifies you.
+It reads your codebase, splits the work into subtasks, spins up coding agents on separate branches, has each one reviewed by a second AI, iterates on feedback until approved, validates the merged result, and notifies you.
 
 ## Install
 
@@ -15,14 +15,19 @@ cd ~/tools/agenthub   # or wherever you cloned it
 pip install -e .
 ```
 
-Set your API keys:
+Set up at least one backend — either an installed CLI or an API key:
 
 ```bash
+# CLI backends (no API key needed if the CLI is already authenticated)
+# Install claude: https://docs.anthropic.com/en/docs/claude-code
+# Install codex:  https://github.com/openai/codex
+
+# API key backends
 export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_API_KEY=sk-...
 ```
 
-Both are optional. If you only have one, agenthub uses that for both coding and review. If you have both, it cross-reviews (Claude codes + Codex reviews, or vice versa) for better results.
+If you only have one backend, agenthub uses it for both coding and review. If you have both, it cross-reviews (Claude codes + Codex reviews, or vice versa) for better results.
 
 ## Usage
 
@@ -30,14 +35,21 @@ Both are optional. If you only have one, agenthub uses that for both coding and 
 # Give it a task
 agenthub "refactor the auth module to use JWT tokens"
 
+# Read the task from a file
+agenthub --prompt-file /tmp/prompt.txt
+agenthub -f /tmp/prompt.txt
+
+# Read from stdin
+cat /tmp/prompt.txt | agenthub -
+
 # Live progress updates in your terminal as it works.
-# Walk away — you'll get a macOS notification when it's done.
+# Walk away — you'll get a notification when it's done.
 ```
 
-That's the main workflow. A few other commands exist:
+Other commands:
 
 ```bash
-# Reconnect to a running session (if you closed the terminal)
+# Show progress of current/last run
 agenthub status
 
 # See what happened in the last run
@@ -49,6 +61,15 @@ agenthub resume
 # Re-run escalated tasks with fresh rounds
 agenthub retry
 
+# Clear state from previous runs (keeps logs)
+agenthub clean
+
+# Clear state and remove current run's log directory
+agenthub clean --logs
+
+# View current config
+agenthub config
+
 # Change a default
 agenthub config max_rounds 5
 agenthub config reviewer claude
@@ -57,16 +78,18 @@ agenthub config reviewer claude
 ## How it works
 
 1. **Planner** reads your codebase, builds an internal import graph, and breaks the task into independent subtasks
-2. **Scheduler** figures out which subtasks can run in parallel and which depend on others
-3. **Workers** (one per subtask) each run on a temporary git branch:
+2. **Complexity gate** classifies the task. If it looks complex (architecture, algorithms), a research phase runs first to deep-read relevant files and produce a brief that feeds into planning
+3. **Scheduler** figures out which subtasks can run in parallel and which depend on others
+4. **Workers** (one per subtask) each run on a temporary git branch:
    - A coding agent implements the subtask
-   - A reviewer checks the diff and gives feedback
-   - The coding agent iterates until the reviewer says LGTM
-   - Max 5 rounds by default — after that it escalates for human review
+   - A reviewer checks the diff against an 8-check rubric and gives feedback
+   - The coding agent iterates until the reviewer approves
+   - Max rounds default to 5 — after that the task escalates for human review
    - Run `agenthub retry` to re-attempt escalated tasks
-4. **Merger** squash-merges approved branches back into your working branch
-5. **Cleanup** deletes all temporary branches
-6. **Notifier** pings you
+5. **Merger** squash-merges approved branches back into your working branch
+6. **Validator** (when enabled) runs a holistic check on all merged changes — diffs the combined result against the original state, auto-detects and runs tests if available (pytest, npm test, make test, cargo test, go test), and calls an LLM to verify delivery and catch regressions. If validation fails, it creates a fix task, runs it through the agent→review→merge loop, and validates again. If the second attempt also fails, the merged work is saved to a safe branch (`<branch_prefix>-validation-failed-<run_id>`, e.g. `tmp/ah-validation-failed-abc123`) and the base branch is rolled back to its pre-run state
+7. **Cleanup** (when `cleanup_branches` is enabled) deletes temporary branches for merged tasks only — branches for failed or escalated tasks are preserved so you can inspect them
+8. **Notifier** sends a macOS notification (with sound) or a terminal bell
 
 ### Who does what
 
@@ -98,12 +121,20 @@ Each subtask moves through these statuses during a run:
 
 ### Review approach
 
-The reviewer acts as a **spec compliance checker**, not a traditional code reviewer. It only checks two things:
+The reviewer evaluates each diff against an 8-check rubric:
 
-1. Does the diff implement every requirement in the task spec?
-2. Will the code crash (missing import, syntax error)?
+| Check | Question |
+|---|---|
+| `run_build` | Does it run/build correctly? |
+| `task_fit` | Does it solve the actual requested task? |
+| `scope_regressions` | Did it stay within scope and avoid regressions? |
+| `logic_edge_cases` | Is the logic correct, including edge cases and failure cases? |
+| `code_quality` | Is the code/design quality acceptable? |
+| `approach_justified` | Is the chosen approach justified versus alternatives? |
+| `metric_improvement` | Did the target metric actually improve? |
+| `change_decision` | Should we keep, reject, or retry this change? |
 
-It does not flag style, naming, edge cases not in the spec, performance, or "better" approaches. If the spec is satisfied, the reviewer approves. This keeps the feedback loop tight and avoids unnecessary escalations.
+Each check gets a pass, fail, or not-applicable result. The reviewer makes a final decision: keep (approve), retry (send feedback), or reject (escalate).
 
 ## Configuration
 
@@ -115,13 +146,22 @@ reviewer: codex              # codex | claude | human
 agent: claude                # codex | claude
 max_rounds: 5               # feedback iterations before escalating
 max_parallel: 4              # concurrent agents
-branch_prefix: tmp/af        # temp branch naming
+branch_prefix: tmp/ah        # temp branch naming
 cleanup_branches: true       # delete branches after merge
-agent_timeout_sec: 300       # seconds before agent times out (escalates)
-prompt_strategy: auto        # auto | zero_shot | few_shot | chain_of_thought | tree_of_thoughts
+notify: true                 # send notification when done
+agent_timeout_sec: 0         # seconds before agent times out (0 = no limit)
+reviewer_timeout_sec: 0      # seconds before reviewer times out (0 = no limit)
+agent_max_turns: 0           # max agent conversation turns (0 = no limit)
+context_files: []            # extra files to include in agent context
+prompt_strategy: auto        # auto | zero_shot | few_shot | chain_of_thought | self_consistency | tree_of_thoughts
 review_consistency: 1        # number of review passes (majority vote when >1)
+research_enabled: true       # run complexity gate + research for complex tasks
+research_model: ""           # model for research phase (empty = use planner_model)
+research_max_files: 10       # max files to deep-read during research
+validation_enabled: true     # run post-merge validation
 claude_model: claude-sonnet-4-20250514
 codex_model: o3-mini
+planner_model: claude-sonnet-4-20250514
 ```
 
 Project-level overrides:
@@ -137,21 +177,23 @@ context_files:
 
 ## Logs
 
-Every run is logged to `.agenthub/logs/` in your project directory. Each task gets a folder with the full history: what the agent did, what the reviewer said, how many rounds it took.
+Every run is logged to `.agenthub/logs/` in your project directory. Each run gets a folder with the plan, research output, per-task round logs, validation results, and a summary.
 
 ```
 .agenthub/logs/
-  20260307_143022/
-    plan.json
+  20260307_143022_000000/
+    plan.json                    # task breakdown and repo analysis
+    research.json                # complexity gate result + research brief
     fix-granger/
-      round-1-agent.md
-      round-1-review.md
+      round-1-agent.md           # what the coding agent did
+      round-1-review.md          # what the reviewer said
       round-2-agent.md
-      round-2-review.md    # LGTM
-      result.json
+      round-2-review.md          # approved
     add-evaluation/
       ...
-    summary.md
+    validation-1.json            # first validation result
+    validation-2.json            # second attempt (if first failed)
+    summary.md                   # final run summary
 ```
 
 Add `.agenthub/` to your `.gitignore`.
@@ -160,7 +202,7 @@ Add `.agenthub/` to your `.gitignore`.
 
 - Python 3.11+
 - git
-- At least one of: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`
+- At least one of: `claude` CLI, `codex` CLI, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`
 - macOS, Linux, or WSL (for notifications, macOS gets native banners)
 
 ## Limitations
