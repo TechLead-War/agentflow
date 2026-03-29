@@ -1,0 +1,482 @@
+{
+  "prompt": "can you see if readme file is all upto date.",
+  "analysis": {
+    "tracked_files": [
+      ".gitignore",
+      "ARCHITECTURE.md",
+      "README.md",
+      "agentflow/__init__.py",
+      "agentflow/__main__.py",
+      "agentflow/agents/__init__.py",
+      "agentflow/agents/base.py",
+      "agentflow/agents/claude_agent.py",
+      "agentflow/agents/codex_agent.py",
+      "agentflow/assignment.py",
+      "agentflow/cli.py",
+      "agentflow/config.py",
+      "agentflow/gate.py",
+      "agentflow/git_ops.py",
+      "agentflow/merger.py",
+      "agentflow/models.py",
+      "agentflow/notifier.py",
+      "agentflow/planner.py",
+      "agentflow/progress.py",
+      "agentflow/prompts/__init__.py",
+      "agentflow/prompts/builder.py",
+      "agentflow/prompts/guardrails.py",
+      "agentflow/prompts/strategies.py",
+      "agentflow/prompts/templates.py",
+      "agentflow/repo_analysis.py",
+      "agentflow/researcher.py",
+      "agentflow/reviewers/__init__.py",
+      "agentflow/reviewers/base.py",
+      "agentflow/reviewers/claude_reviewer.py",
+      "agentflow/reviewers/codex.py",
+      "agentflow/reviewers/human.py",
+      "agentflow/scheduler.py",
+      "agentflow/state.py",
+      "agentflow/validator.py",
+      "agentflow/worker.py",
+      "config.yaml",
+      "pyproject.toml",
+      "setup.py",
+      "tests/test_agent_prompt.py",
+      "tests/test_gate.py",
+      "tests/test_merger.py",
+      "tests/test_repo_analysis.py",
+      "tests/test_researcher.py",
+      "tests/test_review_guardrails.py",
+      "tests/test_validator.py"
+    ],
+    "python_files": [
+      "agentflow/__init__.py",
+      "agentflow/__main__.py",
+      "agentflow/agents/__init__.py",
+      "agentflow/agents/base.py",
+      "agentflow/agents/claude_agent.py",
+      "agentflow/agents/codex_agent.py",
+      "agentflow/assignment.py",
+      "agentflow/cli.py",
+      "agentflow/config.py",
+      "agentflow/gate.py",
+      "agentflow/git_ops.py",
+      "agentflow/merger.py",
+      "agentflow/models.py",
+      "agentflow/notifier.py",
+      "agentflow/planner.py",
+      "agentflow/progress.py",
+      "agentflow/prompts/__init__.py",
+      "agentflow/prompts/builder.py",
+      "agentflow/prompts/guardrails.py",
+      "agentflow/prompts/strategies.py",
+      "agentflow/prompts/templates.py",
+      "agentflow/repo_analysis.py",
+      "agentflow/researcher.py",
+      "agentflow/reviewers/__init__.py",
+      "agentflow/reviewers/base.py",
+      "agentflow/reviewers/claude_reviewer.py",
+      "agentflow/reviewers/codex.py",
+      "agentflow/reviewers/human.py",
+      "agentflow/scheduler.py",
+      "agentflow/state.py",
+      "agentflow/validator.py",
+      "agentflow/worker.py",
+      "setup.py",
+      "tests/test_agent_prompt.py",
+      "tests/test_gate.py",
+      "tests/test_merger.py",
+      "tests/test_repo_analysis.py",
+      "tests/test_researcher.py",
+      "tests/test_review_guardrails.py",
+      "tests/test_validator.py"
+    ],
+    "imports": {
+      "agentflow/__init__.py": [],
+      "agentflow/__main__.py": [
+        "agentflow/__init__.py"
+      ],
+      "agentflow/agents/__init__.py": [
+        "agentflow/agents/base.py",
+        "agentflow/agents/claude_agent.py",
+        "agentflow/agents/codex_agent.py"
+      ],
+      "agentflow/agents/base.py": [
+        "agentflow/agents/__init__.py"
+      ],
+      "agentflow/agents/claude_agent.py": [
+        "agentflow/agents/__init__.py",
+        "agentflow/agents/base.py"
+      ],
+      "agentflow/agents/codex_agent.py": [
+        "agentflow/agents/__init__.py",
+        "agentflow/agents/base.py"
+      ],
+      "agentflow/assignment.py": [
+        "agentflow/models.py"
+      ],
+      "agentflow/cli.py": [
+        "agentflow/__init__.py",
+        "agentflow/config.py",
+        "agentflow/gate.py",
+        "agentflow/git_ops.py",
+        "agentflow/merger.py",
+        "agentflow/models.py",
+        "agentflow/notifier.py",
+        "agentflow/planner.py",
+        "agentflow/progress.py",
+        "agentflow/repo_analysis.py",
+        "agentflow/researcher.py",
+        "agentflow/scheduler.py",
+        "agentflow/state.py",
+        "agentflow/validator.py",
+        "agentflow/worker.py"
+      ],
+      "agentflow/config.py": [
+        "agentflow/__init__.py"
+      ],
+      "agentflow/gate.py": [
+        "agentflow/__init__.py",
+        "agentflow/config.py",
+        "agentflow/models.py",
+        "agentflow/repo_analysis.py"
+      ],
+      "agentflow/git_ops.py": [
+        "agentflow/__init__.py"
+      ],
+      "agentflow/merger.py": [
+        "agentflow/__init__.py",
+        "agentflow/agents/__init__.py",
+        "agentflow/config.py",
+        "agentflow/git_ops.py",
+        "agentflow/models.py",
+        "agentflow/prompts/__init__.py",
+        "agentflow/reviewers/__init__.py",
+        "agentflow/state.py"
+      ],
+      "agentflow/models.py": [
+        "agentflow/__init__.py"
+      ],
+      "agentflow/notifier.py": [
+        "agentflow/__init__.py",
+        "agentflow/models.py"
+      ],
+      "agentflow/planner.py": [
+        "agentflow/__init__.py",
+        "agentflow/assignment.py",
+        "agentflow/config.py",
+        "agentflow/git_ops.py",
+        "agentflow/models.py",
+        "agentflow/prompts/__init__.py",
+        "agentflow/repo_analysis.py"
+      ],
+      "agentflow/progress.py": [
+        "agentflow/__init__.py",
+        "agentflow/models.py",
+        "agentflow/state.py"
+      ],
+      "agentflow/prompts/__init__.py": [
+        "agentflow/prompts/builder.py",
+        "agentflow/prompts/guardrails.py",
+        "agentflow/prompts/strategies.py"
+      ],
+      "agentflow/prompts/builder.py": [
+        "agentflow/models.py",
+        "agentflow/prompts/__init__.py",
+        "agentflow/prompts/strategies.py",
+        "agentflow/prompts/templates.py"
+      ],
+      "agentflow/prompts/guardrails.py": [
+        "agentflow/models.py",
+        "agentflow/prompts/__init__.py"
+      ],
+      "agentflow/prompts/strategies.py": [
+        "agentflow/models.py",
+        "agentflow/prompts/__init__.py"
+      ],
+      "agentflow/prompts/templates.py": [
+        "agentflow/models.py"
+      ],
+      "agentflow/repo_analysis.py": [
+        "agentflow/__init__.py",
+        "agentflow/git_ops.py"
+      ],
+      "agentflow/researcher.py": [
+        "agentflow/__init__.py",
+        "agentflow/config.py",
+        "agentflow/models.py",
+        "agentflow/prompts/__init__.py",
+        "agentflow/repo_analysis.py"
+      ],
+      "agentflow/reviewers/__init__.py": [
+        "agentflow/reviewers/base.py",
+        "agentflow/reviewers/claude_reviewer.py",
+        "agentflow/reviewers/codex.py",
+        "agentflow/reviewers/human.py"
+      ],
+      "agentflow/reviewers/base.py": [
+        "agentflow/models.py",
+        "agentflow/prompts/__init__.py",
+        "agentflow/reviewers/__init__.py"
+      ],
+      "agentflow/reviewers/claude_reviewer.py": [
+        "agentflow/models.py",
+        "agentflow/prompts/__init__.py",
+        "agentflow/reviewers/__init__.py",
+        "agentflow/reviewers/base.py"
+      ],
+      "agentflow/reviewers/codex.py": [
+        "agentflow/models.py",
+        "agentflow/prompts/__init__.py",
+        "agentflow/reviewers/__init__.py",
+        "agentflow/reviewers/base.py"
+      ],
+      "agentflow/reviewers/human.py": [
+        "agentflow/models.py",
+        "agentflow/reviewers/__init__.py",
+        "agentflow/reviewers/base.py"
+      ],
+      "agentflow/scheduler.py": [
+        "agentflow/__init__.py",
+        "agentflow/models.py"
+      ],
+      "agentflow/state.py": [
+        "agentflow/__init__.py",
+        "agentflow/models.py"
+      ],
+      "agentflow/validator.py": [
+        "agentflow/__init__.py",
+        "agentflow/config.py",
+        "agentflow/git_ops.py",
+        "agentflow/models.py",
+        "agentflow/prompts/__init__.py"
+      ],
+      "agentflow/worker.py": [
+        "agentflow/__init__.py",
+        "agentflow/agents/__init__.py",
+        "agentflow/config.py",
+        "agentflow/git_ops.py",
+        "agentflow/models.py",
+        "agentflow/prompts/__init__.py",
+        "agentflow/reviewers/__init__.py",
+        "agentflow/state.py"
+      ],
+      "setup.py": [],
+      "tests/test_agent_prompt.py": [],
+      "tests/test_gate.py": [],
+      "tests/test_merger.py": [],
+      "tests/test_repo_analysis.py": [],
+      "tests/test_researcher.py": [],
+      "tests/test_review_guardrails.py": [],
+      "tests/test_validator.py": []
+    },
+    "imported_by": {
+      "agentflow/__init__.py": [
+        "agentflow/__main__.py",
+        "agentflow/cli.py",
+        "agentflow/config.py",
+        "agentflow/gate.py",
+        "agentflow/git_ops.py",
+        "agentflow/merger.py",
+        "agentflow/models.py",
+        "agentflow/notifier.py",
+        "agentflow/planner.py",
+        "agentflow/progress.py",
+        "agentflow/repo_analysis.py",
+        "agentflow/researcher.py",
+        "agentflow/scheduler.py",
+        "agentflow/state.py",
+        "agentflow/validator.py",
+        "agentflow/worker.py"
+      ],
+      "agentflow/__main__.py": [],
+      "agentflow/agents/__init__.py": [
+        "agentflow/agents/base.py",
+        "agentflow/agents/claude_agent.py",
+        "agentflow/agents/codex_agent.py",
+        "agentflow/merger.py",
+        "agentflow/worker.py"
+      ],
+      "agentflow/agents/base.py": [
+        "agentflow/agents/__init__.py",
+        "agentflow/agents/claude_agent.py",
+        "agentflow/agents/codex_agent.py"
+      ],
+      "agentflow/agents/claude_agent.py": [
+        "agentflow/agents/__init__.py"
+      ],
+      "agentflow/agents/codex_agent.py": [
+        "agentflow/agents/__init__.py"
+      ],
+      "agentflow/assignment.py": [
+        "agentflow/planner.py"
+      ],
+      "agentflow/cli.py": [],
+      "agentflow/config.py": [
+        "agentflow/cli.py",
+        "agentflow/gate.py",
+        "agentflow/merger.py",
+        "agentflow/planner.py",
+        "agentflow/researcher.py",
+        "agentflow/validator.py",
+        "agentflow/worker.py"
+      ],
+      "agentflow/gate.py": [
+        "agentflow/cli.py"
+      ],
+      "agentflow/git_ops.py": [
+        "agentflow/cli.py",
+        "agentflow/merger.py",
+        "agentflow/planner.py",
+        "agentflow/repo_analysis.py",
+        "agentflow/validator.py",
+        "agentflow/worker.py"
+      ],
+      "agentflow/merger.py": [
+        "agentflow/cli.py"
+      ],
+      "agentflow/models.py": [
+        "agentflow/assignment.py",
+        "agentflow/cli.py",
+        "agentflow/gate.py",
+        "agentflow/merger.py",
+        "agentflow/notifier.py",
+        "agentflow/planner.py",
+        "agentflow/progress.py",
+        "agentflow/prompts/builder.py",
+        "agentflow/prompts/guardrails.py",
+        "agentflow/prompts/strategies.py",
+        "agentflow/prompts/templates.py",
+        "agentflow/researcher.py",
+        "agentflow/reviewers/base.py",
+        "agentflow/reviewers/claude_reviewer.py",
+        "agentflow/reviewers/codex.py",
+        "agentflow/reviewers/human.py",
+        "agentflow/scheduler.py",
+        "agentflow/state.py",
+        "agentflow/validator.py",
+        "agentflow/worker.py"
+      ],
+      "agentflow/notifier.py": [
+        "agentflow/cli.py"
+      ],
+      "agentflow/planner.py": [
+        "agentflow/cli.py"
+      ],
+      "agentflow/progress.py": [
+        "agentflow/cli.py"
+      ],
+      "agentflow/prompts/__init__.py": [
+        "agentflow/merger.py",
+        "agentflow/planner.py",
+        "agentflow/prompts/builder.py",
+        "agentflow/prompts/guardrails.py",
+        "agentflow/prompts/strategies.py",
+        "agentflow/researcher.py",
+        "agentflow/reviewers/base.py",
+        "agentflow/reviewers/claude_reviewer.py",
+        "agentflow/reviewers/codex.py",
+        "agentflow/validator.py",
+        "agentflow/worker.py"
+      ],
+      "agentflow/prompts/builder.py": [
+        "agentflow/prompts/__init__.py"
+      ],
+      "agentflow/prompts/guardrails.py": [
+        "agentflow/prompts/__init__.py"
+      ],
+      "agentflow/prompts/strategies.py": [
+        "agentflow/prompts/__init__.py",
+        "agentflow/prompts/builder.py"
+      ],
+      "agentflow/prompts/templates.py": [
+        "agentflow/prompts/builder.py"
+      ],
+      "agentflow/repo_analysis.py": [
+        "agentflow/cli.py",
+        "agentflow/gate.py",
+        "agentflow/planner.py",
+        "agentflow/researcher.py"
+      ],
+      "agentflow/researcher.py": [
+        "agentflow/cli.py"
+      ],
+      "agentflow/reviewers/__init__.py": [
+        "agentflow/merger.py",
+        "agentflow/reviewers/base.py",
+        "agentflow/reviewers/claude_reviewer.py",
+        "agentflow/reviewers/codex.py",
+        "agentflow/reviewers/human.py",
+        "agentflow/worker.py"
+      ],
+      "agentflow/reviewers/base.py": [
+        "agentflow/reviewers/__init__.py",
+        "agentflow/reviewers/claude_reviewer.py",
+        "agentflow/reviewers/codex.py",
+        "agentflow/reviewers/human.py"
+      ],
+      "agentflow/reviewers/claude_reviewer.py": [
+        "agentflow/reviewers/__init__.py"
+      ],
+      "agentflow/reviewers/codex.py": [
+        "agentflow/reviewers/__init__.py"
+      ],
+      "agentflow/reviewers/human.py": [
+        "agentflow/reviewers/__init__.py"
+      ],
+      "agentflow/scheduler.py": [
+        "agentflow/cli.py"
+      ],
+      "agentflow/state.py": [
+        "agentflow/cli.py",
+        "agentflow/merger.py",
+        "agentflow/progress.py",
+        "agentflow/worker.py"
+      ],
+      "agentflow/validator.py": [
+        "agentflow/cli.py"
+      ],
+      "agentflow/worker.py": [
+        "agentflow/cli.py"
+      ],
+      "setup.py": [],
+      "tests/test_agent_prompt.py": [],
+      "tests/test_gate.py": [],
+      "tests/test_merger.py": [],
+      "tests/test_repo_analysis.py": [],
+      "tests/test_researcher.py": [],
+      "tests/test_review_guardrails.py": [],
+      "tests/test_validator.py": []
+    }
+  },
+  "gate": {
+    "is_complex": false,
+    "confidence": 0.75,
+    "reason": "LLM classified as SIMPLE.",
+    "signals": [
+      "llm_classification"
+    ]
+  },
+  "research_brief": null,
+  "tasks": [
+    {
+      "id": "update-readme-documentation",
+      "title": "Review and update README.md for accuracy",
+      "spec": "Review the README.md file against the current codebase implementation and update any outdated information. Check that: 1) Installation instructions are correct 2) Usage examples work with current CLI 3) Feature descriptions match actual implementation 4) Commands and options are accurate 5) Dependencies and requirements are current 6) Architecture overview aligns with actual system design. Compare claims in README against actual code in agentflow/cli.py, agentflow/config.py, and other core modules. Update any sections that are misleading, incomplete, or incorrect.",
+      "rationale": "Documentation accuracy is critical for user adoption and proper system usage. An outdated README can mislead users about installation, usage, or capabilities, leading to frustration and incorrect usage patterns. Given that this is a CLI tool, users rely heavily on the README for first impressions and getting started guidance.",
+      "files": [
+        "README.md"
+      ],
+      "depends_on": [],
+      "complexity": "refactor",
+      "agent": "claude",
+      "reviewer": "codex",
+      "status": "pending",
+      "current_round": 0,
+      "max_rounds": 5,
+      "branch": "",
+      "worktree_path": "",
+      "feedback": null,
+      "error": null
+    }
+  ]
+}

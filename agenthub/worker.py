@@ -86,7 +86,7 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
     task.branch = branch
 
     # Create branch and worktree
-    worktree_dir = str(Path(tempfile.gettempdir()) / f"agentflow-{task.id}")
+    worktree_dir = str(Path(tempfile.gettempdir()) / f"agenthub-{task.id}")
     try:
         # Clean up stale worktree/branch from a previous run if present
         if Path(worktree_dir).exists():
@@ -114,7 +114,6 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
 
     feedback = None
     previous_diff = None
-    timeout = getattr(config, 'agent_timeout_sec', 300)
 
     try:
         for round_num in range(1, task.max_rounds + 1):
@@ -130,15 +129,7 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
             )
 
             try:
-                agent_output = await asyncio.wait_for(
-                    agent.run(prompt, worktree_dir),
-                    timeout=timeout,
-                )
-            except asyncio.TimeoutError:
-                task.status = TaskStatus.ESCALATED
-                task.error = f"Agent timed out after {timeout}s (round {round_num}). Branch preserved for manual review."
-                save_state(state)
-                return
+                agent_output = await agent.run(prompt, worktree_dir)
             except Exception as e:
                 task.status = TaskStatus.FAILED
                 task.error = f"Agent error (round {round_num}): {e}"
@@ -147,7 +138,7 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
 
             # Commit any changes the agent made
             git_ops.commit_all(
-                f"agentflow: {task.id} round {round_num}",
+                f"agenthub: {task.id} round {round_num}",
                 cwd=worktree_dir,
             )
 

@@ -98,7 +98,7 @@ async def _resolve_conflict(task: Task, state: RunState, config: Config) -> bool
             git_ops.run_git(["reset", "--merge"], cwd=repo_path, check=False)
             return False
 
-        git_ops.commit_all(f"agentflow: resolve conflict for {task.id}", cwd=repo_path)
+        git_ops.commit_all(f"agenthub: resolve conflict for {task.id}", cwd=repo_path)
         return True
     except Exception:
         git_ops.run_git(["merge", "--abort"], cwd=repo_path, check=False)
@@ -111,7 +111,10 @@ async def _refresh_branch_before_merge(
     state: RunState,
     config: Config,
 ) -> tuple[bool, bool, str | None]:
-    """Rebase an approved branch onto the latest base and re-review it.
+    """Rebase an approved branch onto the latest base and re-review if needed.
+
+    Skips re-review when the rebase was a no-op (base hasn't moved), since
+    the diff is identical to the one already approved in the worker loop.
 
     Returns:
         (ready_to_merge, no_changes_remaining, message)
@@ -119,7 +122,7 @@ async def _refresh_branch_before_merge(
     repo_path = state.repo_path
     base_branch = state.base_branch
     branch = task.branch
-    worktree_dir = Path(tempfile.gettempdir()) / f"agentflow-mergecheck-{task.id}"
+    worktree_dir = Path(tempfile.gettempdir()) / f"agenthub-mergecheck-{task.id}"
 
     try:
         if worktree_dir.exists():

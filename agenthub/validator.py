@@ -33,7 +33,7 @@ from . import git_ops
 
 logger = logging.getLogger(__name__)
 
-VALIDATOR_TIMEOUT_SEC = int(os.environ.get("AGENTFLOW_VALIDATOR_TIMEOUT_SEC", "180"))
+VALIDATOR_TIMEOUT_SEC = int(os.environ.get("AGENTHUB_VALIDATOR_TIMEOUT_SEC", "180"))
 _TEST_RUNNER_TIMEOUT_SEC = 60
 _MAX_DIFF_CHARS = 30000
 _MAX_BUILD_OUTPUT_CHARS = 5000

@@ -84,17 +84,19 @@ class CreateFixTaskTests(unittest.TestCase):
 
 class DetectTestRunnerTests(unittest.TestCase):
     def test_no_runner_returns_empty(self):
+        import asyncio
         with tempfile.TemporaryDirectory() as tmp:
-            result = _detect_and_run_tests(tmp)
+            result = asyncio.run(_detect_and_run_tests(tmp))
             self.assertEqual(result, "")
 
     def test_detects_pytest_directory(self):
+        import asyncio
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "tests").mkdir()
             (Path(tmp) / "tests" / "test_foo.py").write_text("def test_foo(): pass\n")
             # We don't actually run pytest here (might not be installed),
             # but verify detection doesn't crash
-            result = _detect_and_run_tests(tmp)
+            result = asyncio.run(_detect_and_run_tests(tmp))
             # Result is either test output or empty (if pytest not available)
             self.assertIsInstance(result, str)
 

@@ -78,7 +78,7 @@ class CodexAgent(BaseAgent):
         )
 
         response = await client.chat.completions.create(
-            model=os.environ.get("AGENTFLOW_CODEX_MODEL", "o3-mini"),
+            model=os.environ.get("AGENTHUB_CODEX_MODEL", "o3-mini"),
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"CODEBASE FILES:\n{tree}\n\nTASK:\n{prompt}"},
