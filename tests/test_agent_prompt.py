@@ -23,9 +23,11 @@ class AgentPromptTests(unittest.TestCase):
         prompt = PromptBuilder.build_agent_prompt(task, feedback=None, round_num=1)
 
         self.assertIn("# System Understanding", prompt)
+        self.assertIn("# Ownership", prompt)
         self.assertIn("# Review Bar", prompt)
         self.assertIn("Does it run/build correctly?", prompt)
-        self.assertIn("Use the language and framework syntax that is current for this repo and stack.", prompt)
+        self.assertIn("VERIFY YOUR OWN WORK", prompt)
+        self.assertIn("NEVER SUBMIT GARBAGE", prompt)
 
 
 if __name__ == "__main__":

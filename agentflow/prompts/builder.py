@@ -154,6 +154,29 @@ class PromptBuilder:
         return "\n".join(parts)
 
     @staticmethod
+    def build_researcher_prompt(
+        strategy: PromptStrategy = PromptStrategy.CHAIN_OF_THOUGHT,
+    ) -> str:
+        """Build the system prompt for the researcher.
+
+        Default strategy is CoT because research benefits from systematic
+        step-by-step reasoning about the codebase and approaches.
+        """
+        parts = [templates.RESEARCHER_SYSTEM]
+
+        if strategy in (
+            PromptStrategy.CHAIN_OF_THOUGHT,
+            PromptStrategy.SELF_CONSISTENCY,
+            PromptStrategy.AUTO,
+        ):
+            parts.append(templates.RESEARCHER_COT_REASONING)
+
+        parts.append(templates.RESEARCHER_OUTPUT_FORMAT)
+        parts.append(templates.RESEARCHER_GUARDRAIL)
+
+        return "\n".join(parts)
+
+    @staticmethod
     def build_merge_prompt(branch: str, base: str, title: str) -> str:
         """Build the prompt for merge conflict resolution.
 
@@ -163,3 +186,26 @@ class PromptBuilder:
         return templates.MERGER_PROMPT_TEMPLATE.format(
             branch=branch, base=base, title=title,
         )
+
+    @staticmethod
+    def build_validator_prompt(
+        strategy: PromptStrategy = PromptStrategy.CHAIN_OF_THOUGHT,
+    ) -> str:
+        """Build the system prompt for the post-merge validator.
+
+        Default strategy is CoT because holistic validation benefits from
+        systematic step-by-step reasoning about completeness and correctness.
+        """
+        parts = [templates.VALIDATOR_SYSTEM]
+
+        if strategy in (
+            PromptStrategy.CHAIN_OF_THOUGHT,
+            PromptStrategy.SELF_CONSISTENCY,
+            PromptStrategy.AUTO,
+        ):
+            parts.append(templates.VALIDATOR_COT_REASONING)
+
+        parts.append(templates.VALIDATOR_OUTPUT_FORMAT)
+        parts.append(templates.VALIDATOR_GUARDRAIL)
+
+        return "\n".join(parts)

@@ -102,6 +102,84 @@ def _read_prompt_stdin() -> str:
     return prompt
 
 
+async def _run_validation_phase(state, config, prompt, repo_path):
+    """Shared validation logic used by run, resume, and retry.
+
+    Returns the final ValidationResult (or None if skipped/errored).
+    On failure: saves work to a safe branch, rolls back base branch.
+    """
+    from .validator import validate as run_validation, create_fix_task
+    from .worker import run_workers
+    from .merger import merge_all
+    from .state import save_state, log_validation
+    from .models import TaskStatus
+    from . import git_ops
+    import logging as _logging
+
+    state.phase = "validating"
+    state.validation_attempt = 1
+    save_state(state)
+
+    validation_result = None
+    try:
+        validation_result = await run_validation(prompt, state, config)
+    except Exception as val_err:
+        _logging.getLogger(__name__).warning(
+            "Validation error, skipping: %s", val_err,
+        )
+
+    if validation_result is not None:
+        log_validation(repo_path, state.run_id, 1, validation_result.to_dict())
+
+    if validation_result is not None and not validation_result.passed:
+        # --- AUTO-FIX ATTEMPT ---
+        fix_task = create_fix_task(validation_result, prompt, config)
+        state.tasks.append(fix_task)
+        state.phase = "running"
+        fix_task.status = TaskStatus.QUEUED
+        save_state(state)
+
+        await run_workers([fix_task], config, state)
+
+        state.phase = "merging"
+        save_state(state)
+        await merge_all(state, config)
+
+        # Validate again (attempt 2)
+        state.phase = "validating"
+        state.validation_attempt = 2
+        save_state(state)
+
+        validation_result_2 = None
+        try:
+            validation_result_2 = await run_validation(prompt, state, config)
+        except Exception as val_err:
+            _logging.getLogger(__name__).warning(
+                "Second validation error: %s", val_err,
+            )
+
+        if validation_result_2 is not None:
+            log_validation(repo_path, state.run_id, 2, validation_result_2.to_dict())
+
+        if validation_result_2 is None or not validation_result_2.passed:
+            # Save merged work to a safe branch before rolling back
+            safe_branch = f"{config.branch_prefix}-validation-failed-{state.run_id}"
+            git_ops.run_git(["branch", safe_branch], cwd=repo_path, check=False)
+
+            # Roll back base branch to clean state
+            if state.base_sha:
+                git_ops.run_git(["reset", "--hard", state.base_sha], cwd=repo_path)
+
+            state.status = "validation_failed"
+            state.phase = "validation_failed"
+            save_state(state)
+            return validation_result_2 or validation_result
+        else:
+            return validation_result_2
+
+    return validation_result
+
+
 async def _cmd_run(prompt: str):
     from .config import load_config, check_api_keys
     from .planner import plan
@@ -111,8 +189,8 @@ async def _cmd_run(prompt: str):
     from .merger import merge_all
     from .notifier import notify
     from .progress import show_live_progress
-    from .state import load_state, save_state, log_plan, log_summary
-    from .models import RunState, TaskStatus
+    from .state import load_state, save_state, log_plan, log_research, log_summary
+    from .models import RunState, TaskStatus, GateResult
     from . import git_ops
 
     repo_path = git_ops.get_repo_root(".")
@@ -139,9 +217,11 @@ async def _cmd_run(prompt: str):
         stashed = False
 
     base_branch = git_ops.get_current_branch(cwd=repo_path)
+    base_sha = git_ops.run_git(["rev-parse", "HEAD"], cwd=repo_path)
 
     # Initialize state immediately so `agentflow status` works from second 0.
     state = RunState.create(prompt, [], repo_path, base_branch)
+    state.base_sha = base_sha
     state.status = "running"
     state.phase = "initializing"
     save_state(state)
@@ -158,7 +238,55 @@ async def _cmd_run(prompt: str):
 
                 try:
                     repo_analysis = analyze_repository(repo_path)
-                    tasks = await plan(prompt, config, repo_path, analysis=repo_analysis)
+
+                    # --- PHASE: GATE + RESEARCH ---
+                    research_brief = None
+                    gate_result = None
+                    if config.research_enabled:
+                        from .gate import classify_complexity
+                        from .researcher import research as run_research
+
+                        state.phase = "gating"
+                        save_state(state)
+
+                        try:
+                            gate_result = await classify_complexity(prompt, repo_analysis, config)
+                        except Exception as gate_err:
+                            import logging as _logging
+                            _logging.getLogger(__name__).warning(
+                                "Complexity gate failed, skipping research: %s", gate_err,
+                            )
+                            gate_result = GateResult(
+                                is_complex=False, confidence=0.0,
+                                reason=f"Gate error: {gate_err}", signals=[],
+                            )
+
+                        if gate_result.is_complex:
+                            state.phase = "researching"
+                            save_state(state)
+
+                            try:
+                                research_brief = await run_research(
+                                    prompt, repo_analysis, config, repo_path,
+                                )
+                            except Exception as res_err:
+                                import logging as _logging
+                                _logging.getLogger(__name__).warning(
+                                    "Research phase failed, proceeding without brief: %s",
+                                    res_err,
+                                )
+
+                        log_research(
+                            repo_path, state.run_id,
+                            gate_result.to_dict(),
+                            research_brief.to_dict() if research_brief else None,
+                        )
+
+                    tasks = await plan(
+                        prompt, config, repo_path,
+                        analysis=repo_analysis,
+                        research_brief=research_brief,
+                    )
                 except Exception as e:
                     state.status = "failed"
                     state.phase = "failed"
@@ -186,6 +314,8 @@ async def _cmd_run(prompt: str):
                 plan_data = {
                     "prompt": prompt,
                     "analysis": repo_analysis.to_dict(),
+                    "gate": gate_result.to_dict() if gate_result else None,
+                    "research_brief": research_brief.to_dict() if research_brief else None,
                     "tasks": [t.to_dict() for t in tasks],
                 }
                 log_plan(repo_path, state.run_id, plan_data)
@@ -214,9 +344,17 @@ async def _cmd_run(prompt: str):
 
                 await merge_all(state, config)
 
-                # --- PHASE: COMPLETED ---
-                state.status = "completed"
-                state.phase = "completed"
+                # --- PHASE: VALIDATING ---
+                final_validation = None
+                if config.validation_enabled:
+                    final_validation = await _run_validation_phase(
+                        state, config, prompt, repo_path,
+                    )
+
+                if state.status != "validation_failed":
+                    state.status = "completed"
+                    state.phase = "completed"
+
                 state.finished_at = datetime.now().isoformat()
                 save_state(state)
 
@@ -263,18 +401,49 @@ async def _cmd_run(prompt: str):
                 summary_lines.append(f"    error: {t.error}")
 
         summary_lines.append(f"\n{len(merged)} merged, {len(failed)} failed")
+
+        safe_branch = f"{config.branch_prefix}-validation-failed-{state.run_id}"
+
+        if state.validation_attempt > 0:
+            if state.status == "validation_failed":
+                summary_lines.append(f"\n## Validation")
+                summary_lines.append(f"  FAILED after {state.validation_attempt} attempt(s)")
+                if final_validation and final_validation.issues:
+                    summary_lines.append(f"  Issues:")
+                    for issue in final_validation.issues:
+                        summary_lines.append(f"    - {issue}")
+                if final_validation and final_validation.summary:
+                    summary_lines.append(f"  Summary: {final_validation.summary}")
+                summary_lines.append(f"  Base branch rolled back to pre-run state.")
+                summary_lines.append(f"  Safe branch with all merged work: {safe_branch}")
+            else:
+                summary_lines.append(f"\n## Validation")
+                summary_lines.append(f"  Passed (attempt {state.validation_attempt})")
+
         summary = "\n".join(summary_lines)
 
         log_summary(repo_path, state.run_id, summary)
 
         # Print final results (outside live display)
+        status_label = "complete" if state.status == "completed" else "VALIDATION FAILED"
         print(f"\n{'=' * 50}")
-        print(f"  agentflow complete \u2014 {state.run_id}")
+        print(f"  agentflow {status_label} \u2014 {state.run_id}")
         print(f"{'=' * 50}")
         for t in state.tasks:
             icon = "\u2713" if t.status == TaskStatus.MERGED else "\u2717"
             print(f"  {icon} {t.id:30s}  {t.current_round} rounds   {t.status.value}")
         print(f"\n  {len(merged)} merged, {len(failed)} failed")
+        if state.status == "validation_failed":
+            print(f"\n  VALIDATION FAILED")
+            if final_validation and final_validation.issues:
+                print(f"  Issues found:")
+                for issue in final_validation.issues:
+                    print(f"    - {issue}")
+            if final_validation and final_validation.summary:
+                print(f"  Summary: {final_validation.summary}")
+            print(f"\n  Your branch has been rolled back to its pre-run state.")
+            print(f"  The merged work is saved on: {safe_branch}")
+            print(f"  To inspect it: git checkout {safe_branch}")
         print(f"  Logs: .agentflow/logs/{state.run_id}/")
         print(f"{'=' * 50}")
 
@@ -375,6 +544,23 @@ async def _cmd_resume():
             await run_workers(batch.tasks, config, state)
 
         await merge_all(state, config)
+
+    # --- VALIDATION ---
+    if config.validation_enabled:
+        final_validation = await _run_validation_phase(
+            state, config, state.prompt, repo_path,
+        )
+        if state.status == "validation_failed":
+            safe_branch = f"{config.branch_prefix}-validation-failed-{state.run_id}"
+            print(f"\n  VALIDATION FAILED")
+            if final_validation and final_validation.issues:
+                for issue in final_validation.issues:
+                    print(f"    - {issue}")
+            print(f"\n  Branch rolled back. Merged work saved on: {safe_branch}")
+            state.finished_at = datetime.now().isoformat()
+            save_state(state)
+            notify(state)
+            return
 
     state.status = "completed"
     state.finished_at = datetime.now().isoformat()
@@ -482,8 +668,17 @@ async def _cmd_retry():
 
             await merge_all(state, config)
 
-            state.status = "completed"
-            state.phase = "completed"
+            # --- VALIDATION ---
+            final_validation = None
+            if config.validation_enabled:
+                final_validation = await _run_validation_phase(
+                    state, config, state.prompt, repo_path,
+                )
+
+            if state.status != "validation_failed":
+                state.status = "completed"
+                state.phase = "completed"
+
             state.finished_at = datetime.now().isoformat()
             save_state(state)
 
@@ -499,13 +694,22 @@ async def _cmd_retry():
     still_escalated = [t for t in state.tasks if t.status == TaskStatus.ESCALATED]
     failed = [t for t in state.tasks if t.status == TaskStatus.FAILED]
 
+    status_label = "retry complete" if state.status == "completed" else "VALIDATION FAILED"
     print(f"\n{'=' * 50}")
-    print(f"  agentflow retry complete")
+    print(f"  agentflow {status_label}")
     print(f"{'=' * 50}")
     for t in escalated:
         icon = "\u2713" if t.status in (TaskStatus.MERGED, TaskStatus.APPROVED) else "\u2717"
         print(f"  {icon} {t.id:30s}  {t.current_round} rounds   {t.status.value}")
     print(f"\n  {len(merged)} total merged, {len(still_escalated)} still escalated, {len(failed)} failed")
+    if state.status == "validation_failed":
+        safe_branch = f"{config.branch_prefix}-validation-failed-{state.run_id}"
+        print(f"\n  VALIDATION FAILED")
+        if final_validation and final_validation.issues:
+            for issue in final_validation.issues:
+                print(f"    - {issue}")
+        print(f"\n  Branch rolled back. Merged work saved on: {safe_branch}")
+        print(f"  To inspect it: git checkout {safe_branch}")
     print(f"{'=' * 50}")
 
     notify(state)

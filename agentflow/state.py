@@ -84,6 +84,20 @@ def log_plan(repo_path: str, run_id: str, plan_data: dict):
         json.dump(plan_data, f, indent=2)
 
 
+def log_research(repo_path: str, run_id: str, gate_data: dict, brief_data: dict | None):
+    """Write the research gate result and optional brief."""
+    log_dir = get_log_dir(repo_path, run_id)
+    with open(log_dir / "research.json", "w") as f:
+        json.dump({"gate": gate_data, "brief": brief_data}, f, indent=2)
+
+
+def log_validation(repo_path: str, run_id: str, attempt: int, result_data: dict):
+    """Write a validation result to the run log directory."""
+    log_dir = get_log_dir(repo_path, run_id)
+    with open(log_dir / f"validation-{attempt}.json", "w") as f:
+        json.dump(result_data, f, indent=2)
+
+
 def log_summary(repo_path: str, run_id: str, summary: str):
     """Write the final summary."""
     log_dir = get_log_dir(repo_path, run_id)

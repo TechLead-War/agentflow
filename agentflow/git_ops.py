@@ -127,6 +127,16 @@ def merge_branch(branch: str, cwd: str = ".", squash: bool = True) -> bool:
         return False
 
 
+def rebase_onto(base: str, cwd: str = ".") -> bool:
+    """Rebase the current branch onto base. Returns True if clean, False if conflict."""
+    try:
+        run_git(["rebase", base], cwd=cwd)
+        return True
+    except GitError:
+        run_git(["rebase", "--abort"], cwd=cwd, check=False)
+        return False
+
+
 def get_file_tree(cwd: str = ".", max_depth: int = 4) -> str:
     """Get a tree-like listing of tracked files."""
     files = run_git(["ls-files"], cwd=cwd, check=False)

@@ -21,11 +21,15 @@ STATUS_STYLES = {
 # Phase display styles: (rich style, human label)
 PHASE_STYLES = {
     "initializing": ("bold white", "Initializing"),
+    "gating":       ("bold white", "Classifying complexity..."),
+    "researching":  ("bold magenta", "Researching..."),
     "planning":     ("bold cyan", "Planning tasks..."),
     "scheduling":   ("bold cyan", "Scheduling batches"),
     "running":      ("bold green", "Running"),
-    "merging":      ("bold blue", "Merging branches"),
-    "completed":    ("bold green", "Completed"),
+    "merging":           ("bold blue", "Merging branches"),
+    "validating":        ("bold magenta", "Validating changes..."),
+    "validation_failed": ("bold red", "Validation Failed"),
+    "completed":         ("bold green", "Completed"),
     "failed":       ("bold red", "Failed"),
     "interrupted":  ("bold yellow", "Interrupted"),
 }
@@ -110,6 +114,22 @@ def build_status_table(state: RunState):
             table.add_row(
                 "[dim]\u25cb[/]",
                 "[dim]Checking config & prerequisites[/]",
+                "-", "",
+                f"[{phase_style}]{phase_label}[/]",
+                "-",
+            )
+        elif state.phase == "gating":
+            table.add_row(
+                "[bold white]\u25cf[/]",
+                "[bold white]Classifying task complexity[/]",
+                "-", "",
+                f"[{phase_style}]{phase_label}[/]",
+                "-",
+            )
+        elif state.phase == "researching":
+            table.add_row(
+                "[bold magenta]\u25cf[/]",
+                "[bold magenta]Researching codebase for optimal approach[/]",
                 "-", "",
                 f"[{phase_style}]{phase_label}[/]",
                 "-",

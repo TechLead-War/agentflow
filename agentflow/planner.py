@@ -5,7 +5,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from .models import Task, TaskComplexity
+from .models import Task, TaskComplexity, ResearchBrief
 from .config import Config
 from .assignment import assign
 from .prompts import PromptBuilder, PromptStrategy, sanitize_input, validate_planner_output
@@ -22,6 +22,7 @@ async def plan(
     config: Config,
     repo_path: str,
     analysis: RepoAnalysis | None = None,
+    research_brief: ResearchBrief | None = None,
 ) -> list[Task]:
     """Break a user prompt into structured tasks using an AI planner."""
 
@@ -42,6 +43,8 @@ async def plan(
     if context_content:
         user_message += f"KEY FILES:\n{context_content}\n\n"
     user_message += f"{analysis.to_prompt_context()}\n\n"
+    if research_brief:
+        user_message += f"{research_brief.to_prompt_context()}\n\n"
     user_message += f"USER REQUEST:\n{prompt}"
 
     # Detect available providers for assignment (CLI or API)

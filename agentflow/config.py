@@ -27,10 +27,14 @@ DEFAULTS = {
     "agent_timeout_sec": 300,
     "prompt_strategy": "auto",
     "review_consistency": 1,
+    "research_enabled": True,
+    "research_model": "",
+    "research_max_files": 10,
+    "validation_enabled": True,
 }
 
-_INT_FIELDS = {"max_rounds", "max_parallel", "agent_timeout_sec", "review_consistency"}
-_BOOL_FIELDS = {"cleanup_branches", "notify"}
+_INT_FIELDS = {"max_rounds", "max_parallel", "agent_timeout_sec", "review_consistency", "research_max_files"}
+_BOOL_FIELDS = {"cleanup_branches", "notify", "research_enabled", "validation_enabled"}
 _ALLOWED_AGENT = {"claude", "codex"}
 _ALLOWED_REVIEWER = {"claude", "codex", "human"}
 _ALLOWED_PROMPT_STRATEGY = {
@@ -55,6 +59,10 @@ class Config:
     agent_timeout_sec: int = 300
     prompt_strategy: str = "auto"
     review_consistency: int = 1
+    research_enabled: bool = True
+    research_model: str = ""
+    research_max_files: int = 10
+    validation_enabled: bool = True
 
 
 def _coerce_config_value(key: str, value, default):
