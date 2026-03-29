@@ -12,6 +12,7 @@ from . import git_ops
 from .agents import ClaudeAgent, CodexAgent
 from .reviewers import CodexReviewer, ClaudeReviewer, HumanReviewer
 
+
 def _get_agent(agent_type: AgentType):
     if agent_type == AgentType.CLAUDE:
         return ClaudeAgent()
@@ -54,7 +55,6 @@ async def run_workers(
         return_exceptions=True,
     )
 
-    # Catch any unhandled exceptions from gather so they don't break the flow
     for i, result in enumerate(results):
         if isinstance(result, Exception):
             task = tasks[i]
@@ -72,10 +72,8 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
     branch = f"{config.branch_prefix}-{task.id}"
     task.branch = branch
 
-    # Create branch and worktree
     worktree_dir = str(Path(tempfile.gettempdir()) / f"agenthub-{task.id}")
     try:
-        # Clean up stale worktree/branch from a previous run if present
         if Path(worktree_dir).exists():
             git_ops.remove_worktree(worktree_dir, cwd=repo_path)
             if Path(worktree_dir).exists():
@@ -83,9 +81,7 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
                 shutil.rmtree(worktree_dir, ignore_errors=True)
             git_ops.prune_worktrees(cwd=repo_path)
 
-        # Delete branch if it already exists (e.g. from a failed retry)
         git_ops.delete_branch(branch, cwd=repo_path, force=True)
-
         git_ops.create_branch(branch, base=base_branch, cwd=repo_path)
         git_ops.create_worktree(branch, worktree_dir, cwd=repo_path)
         task.worktree_path = worktree_dir
@@ -100,7 +96,10 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
     reviewer = _get_reviewer(reviewer_type, consistency_passes=config.review_consistency)
 
     feedback = None
-    previous_diff = None
+    previous_incremental = None
+    agent_timeout = config.agent_timeout_sec
+    reviewer_timeout = config.reviewer_timeout_sec
+    max_turns = config.agent_max_turns
 
     try:
         for round_num in range(1, task.max_rounds + 1):
@@ -109,27 +108,39 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
             # --- AGENT PHASE ---
             update_task_status(state, task.id, TaskStatus.AGENT_WORKING, round_num=round_num)
 
-            # Resolve prompt strategy from config (auto, or explicit override)
             strategy_override = _get_strategy_override(config)
             prompt = PromptBuilder.build_agent_prompt(
                 task, feedback, round_num, strategy_override,
             )
 
+            pre_agent_sha = git_ops.run_git(
+                ["rev-parse", "HEAD"], cwd=worktree_dir,
+            ).strip()
+
             try:
-                agent_output = await agent.run(prompt, worktree_dir)
+                if agent_timeout and agent_timeout > 0:
+                    agent_output = await asyncio.wait_for(
+                        agent.run(prompt, worktree_dir, max_turns=max_turns),
+                        timeout=agent_timeout,
+                    )
+                else:
+                    agent_output = await agent.run(prompt, worktree_dir, max_turns=max_turns)
+            except asyncio.TimeoutError:
+                task.status = TaskStatus.ESCALATED
+                task.error = f"Agent timed out after {agent_timeout}s (round {round_num}). Branch preserved for manual review."
+                save_state(state)
+                return
             except Exception as e:
                 task.status = TaskStatus.FAILED
                 task.error = f"Agent error (round {round_num}): {e}"
                 save_state(state)
                 return
 
-            # Commit any changes the agent made
             git_ops.commit_all(
                 f"agenthub: {task.id} round {round_num}",
                 cwd=worktree_dir,
             )
 
-            # Log agent output
             log_round(repo_path, state.run_id, task.id, round_num, "agent", agent_output)
 
             # --- REVIEW PHASE ---
@@ -138,16 +149,13 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
             diff = git_ops.get_diff(branch, base=base_branch, cwd=repo_path)
 
             if not diff.strip():
-                # Agent made no changes
                 log_round(repo_path, state.run_id, task.id, round_num, "review",
                           "No changes detected. Skipping review.")
                 if round_num == 1:
-                    # Handle no-op tasks where the requested change already exists.
                     if _agent_output_indicates_noop_complete(agent_output):
                         task.status = TaskStatus.MERGED
                         task.error = None
                         task.feedback = "No changes required; task already satisfied."
-                        # Nothing to merge for no-op tasks.
                         task.branch = ""
                         save_state(state)
                         return
@@ -157,7 +165,6 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
                     save_state(state)
                     return
 
-                # On subsequent rounds with no diff against base, treat as done.
                 task.status = TaskStatus.MERGED
                 task.error = None
                 task.feedback = "No additional changes required."
@@ -166,34 +173,86 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
                 return
 
             # --- STALE FEEDBACK DETECTION ---
-            # If the diff hasn't meaningfully changed from last round, the agent
-            # is stuck in a loop. Escalate instead of auto-approving a bad change.
-            if previous_diff and round_num > 1:
-                similarity = SequenceMatcher(None, previous_diff, diff).ratio()
-                if similarity > 0.95:
+            # Compare INCREMENTAL changes (what the agent changed this round),
+            # not total diff against base. Prevents false positives when the
+            # reviewer requests small fixes to a large correct change.
+            post_agent_sha = git_ops.run_git(
+                ["rev-parse", "HEAD"], cwd=worktree_dir,
+            ).strip()
+
+            if pre_agent_sha != post_agent_sha:
+                incremental = git_ops.run_git(
+                    ["diff", pre_agent_sha, post_agent_sha],
+                    cwd=worktree_dir, check=False,
+                )
+            else:
+                incremental = ""
+
+            if previous_incremental is not None and round_num > 1:
+                if not incremental.strip():
                     log_round(repo_path, state.run_id, task.id, round_num, "review",
-                              f"Stale loop detected (diff similarity: {similarity:.0%}). "
-                              f"Escalating to prevent repeated retries.")
+                              "Agent made no incremental changes this round. "
+                              "Escalating — agent could not address reviewer feedback.")
                     task.status = TaskStatus.ESCALATED
                     task.feedback = (
-                        f"Escalated: agent made no meaningful progress after round "
-                        f"{round_num - 1}. Diff similarity {similarity:.0%}."
+                        f"Escalated: agent made no incremental changes on round "
+                        f"{round_num} despite reviewer feedback."
                     )
                     task.error = (
-                        f"Stale retry loop detected on round {round_num}. "
+                        f"Stale loop detected on round {round_num} (zero incremental changes). "
                         "Branch preserved for manual review."
                     )
                     save_state(state)
                     return
-            previous_diff = diff
+
+                similarity = SequenceMatcher(None, previous_incremental, incremental).ratio()
+                if similarity > 0.95:
+                    log_round(repo_path, state.run_id, task.id, round_num, "review",
+                              f"Stale loop detected (incremental diff similarity: {similarity:.0%}). "
+                              f"Agent is repeating the same changes. Escalating.")
+                    task.status = TaskStatus.ESCALATED
+                    task.feedback = (
+                        f"Escalated: agent repeated the same incremental changes on round "
+                        f"{round_num}. Incremental diff similarity {similarity:.0%}."
+                    )
+                    task.error = (
+                        f"Stale retry loop detected on round {round_num} "
+                        f"(incremental similarity {similarity:.0%}). "
+                        "Branch preserved for manual review."
+                    )
+                    save_state(state)
+                    return
+
+            previous_incremental = incremental
 
             try:
-                result = await reviewer.review(
-                    task_spec=task.spec,
-                    diff=diff,
-                    round_num=round_num,
-                    previous_feedback=feedback,
+                if reviewer_timeout and reviewer_timeout > 0:
+                    result = await asyncio.wait_for(
+                        reviewer.review(
+                            task_spec=task.spec,
+                            diff=diff,
+                            round_num=round_num,
+                            previous_feedback=feedback,
+                        ),
+                        timeout=reviewer_timeout,
+                    )
+                else:
+                    result = await reviewer.review(
+                        task_spec=task.spec,
+                        diff=diff,
+                        round_num=round_num,
+                        previous_feedback=feedback,
+                    )
+            except asyncio.TimeoutError:
+                log_round(repo_path, state.run_id, task.id, round_num, "review",
+                          f"Reviewer timed out after {reviewer_timeout}s. Escalating.")
+                task.status = TaskStatus.ESCALATED
+                task.error = (
+                    f"Reviewer timed out after {reviewer_timeout}s on round {round_num}. "
+                    "Branch preserved for manual review."
                 )
+                save_state(state)
+                return
             except Exception as e:
                 log_round(repo_path, state.run_id, task.id, round_num, "review",
                           f"Reviewer error: {e}. Escalating for manual review.")
@@ -231,7 +290,6 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
                 round_num=round_num, feedback=feedback,
             )
 
-        # Exhausted all rounds without approval — escalate gracefully
         task.status = TaskStatus.ESCALATED
         task.error = (
             f"Not approved after {task.max_rounds} rounds. "
@@ -240,7 +298,6 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
         save_state(state)
 
     finally:
-        # Clean up worktree (branch stays for merging)
         git_ops.remove_worktree(worktree_dir, cwd=repo_path)
         git_ops.prune_worktrees(cwd=repo_path)
 
@@ -249,7 +306,7 @@ def _get_strategy_override(config: Config) -> PromptStrategy | None:
     """Resolve prompt strategy override from config."""
     raw = config.prompt_strategy
     if raw == "auto":
-        return None  # Let PromptBuilder auto-select based on complexity
+        return None
     try:
         return PromptStrategy(raw)
     except ValueError:

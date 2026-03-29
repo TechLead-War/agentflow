@@ -273,7 +273,7 @@ class RunState:
     def create(cls, prompt: str, tasks: list[Task], repo_path: str, base_branch: str) -> RunState:
         now = datetime.now()
         return cls(
-            run_id=now.strftime("%Y%m%d_%H%M%S"),
+            run_id=now.strftime("%Y%m%d_%H%M%S") + f"_{now.microsecond:06d}",
             started_at=now.isoformat(),
             prompt=prompt,
             tasks=tasks,

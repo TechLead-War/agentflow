@@ -11,6 +11,20 @@ from ..prompts import PromptBuilder, PromptStrategy
 logger = logging.getLogger(__name__)
 
 
+_MAX_DIFF_CHARS = 50000
+
+
+def _truncate_diff(diff: str) -> str:
+    """Truncate diff with indicator so the reviewer knows it's incomplete."""
+    if len(diff) <= _MAX_DIFF_CHARS:
+        return diff
+    return (
+        diff[:_MAX_DIFF_CHARS]
+        + f"\n\n... [DIFF TRUNCATED — showing {_MAX_DIFF_CHARS:,} of {len(diff):,} chars. "
+        f"Review based on the visible portion only.]\n"
+    )
+
+
 class CodexReviewer(BaseReviewer):
     """Code reviewer using Codex CLI with API fallback.
 
@@ -91,7 +105,8 @@ class CodexReviewer(BaseReviewer):
         previous_feedback: str | None = None,
     ) -> ReviewResult:
         review_prompt = PromptBuilder.build_review_prompt(PromptStrategy.CHAIN_OF_THOUGHT)
-        user_content = f"TASK:\n{task_spec}\n\nDIFF:\n{diff[:12000]}\n\nROUND: {round_num}"
+        truncated_diff = _truncate_diff(diff)
+        user_content = f"TASK:\n{task_spec}\n\nDIFF:\n{truncated_diff}\n\nROUND: {round_num}"
         if previous_feedback:
             user_content += f"\n\nPREVIOUS FEEDBACK (round {round_num - 1}):\n{previous_feedback}"
 
@@ -107,7 +122,16 @@ class CodexReviewer(BaseReviewer):
             stderr=asyncio.subprocess.PIPE,
         )
 
-        stdout, stderr = await proc.communicate(input=full_prompt.encode("utf-8"))
+        try:
+            stdout, stderr = await proc.communicate(input=full_prompt.encode("utf-8"))
+        except (asyncio.CancelledError, Exception):
+            proc.kill()
+            try:
+                await proc.communicate()
+            except Exception:
+                pass
+            raise
+
         text = stdout.decode("utf-8", errors="replace")
 
         if proc.returncode != 0:
@@ -122,9 +146,10 @@ class CodexReviewer(BaseReviewer):
 
         review_prompt = PromptBuilder.build_review_prompt(PromptStrategy.CHAIN_OF_THOUGHT)
         client = AsyncOpenAI()
-        model = os.environ.get("AGENTHUB_CODEX_MODEL", "o3-mini")
+        model = os.environ.get("AGENTFLOW_CODEX_MODEL", "o3-mini")
 
-        user_content = f"TASK:\n{task_spec}\n\nDIFF:\n{diff[:12000]}\n\nROUND: {round_num}"
+        truncated_diff = _truncate_diff(diff)
+        user_content = f"TASK:\n{task_spec}\n\nDIFF:\n{truncated_diff}\n\nROUND: {round_num}"
         if previous_feedback:
             user_content += f"\n\nPREVIOUS FEEDBACK (round {round_num - 1}):\n{previous_feedback}"
 

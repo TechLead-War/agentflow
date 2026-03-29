@@ -1,9 +1,9 @@
-# agentflow
+# agenthub
 
 Automated coding agents with built-in code review. Give it a task in plain English, walk away, get pinged when it's done.
 
 ```bash
-agentflow "add rate limiting to all API endpoints"
+agenthub "add rate limiting to all API endpoints"
 ```
 
 It reads your codebase, splits the work into subtasks, spins up coding agents on separate branches, has each one reviewed by a second AI, iterates on feedback until approved, merges everything, cleans up the branches, and notifies you.
@@ -11,7 +11,7 @@ It reads your codebase, splits the work into subtasks, spins up coding agents on
 ## Install
 
 ```bash
-cd ~/tools/agentflow   # or wherever you cloned it
+cd ~/tools/agenthub   # or wherever you cloned it
 pip install -e .
 ```
 
@@ -22,13 +22,13 @@ export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_API_KEY=sk-...
 ```
 
-Both are optional. If you only have one, agentflow uses that for both coding and review. If you have both, it cross-reviews (Claude codes + Codex reviews, or vice versa) for better results.
+Both are optional. If you only have one, agenthub uses that for both coding and review. If you have both, it cross-reviews (Claude codes + Codex reviews, or vice versa) for better results.
 
 ## Usage
 
 ```bash
 # Give it a task
-agentflow "refactor the auth module to use JWT tokens"
+agenthub "refactor the auth module to use JWT tokens"
 
 # Live progress updates in your terminal as it works.
 # Walk away — you'll get a macOS notification when it's done.
@@ -38,20 +38,20 @@ That's the main workflow. A few other commands exist:
 
 ```bash
 # Reconnect to a running session (if you closed the terminal)
-agentflow status
+agenthub status
 
 # See what happened in the last run
-agentflow log
+agenthub log
 
 # Pick up an interrupted run
-agentflow resume
+agenthub resume
 
 # Re-run escalated tasks with fresh rounds
-agentflow retry
+agenthub retry
 
 # Change a default
-agentflow config max_rounds 5
-agentflow config reviewer claude
+agenthub config max_rounds 5
+agenthub config reviewer claude
 ```
 
 ## How it works
@@ -63,7 +63,7 @@ agentflow config reviewer claude
    - A reviewer checks the diff and gives feedback
    - The coding agent iterates until the reviewer says LGTM
    - Max 5 rounds by default — after that it escalates for human review
-   - Run `agentflow retry` to re-attempt escalated tasks
+   - Run `agenthub retry` to re-attempt escalated tasks
 4. **Merger** squash-merges approved branches back into your working branch
 5. **Cleanup** deletes all temporary branches
 6. **Notifier** pings you
@@ -93,7 +93,7 @@ Each subtask moves through these statuses during a run:
 | `approved` | Reviewer said LGTM, ready to merge |
 | `merging` | Being merged into the base branch |
 | `merged` | Successfully merged — done |
-| `escalated` | Not approved after max rounds, timed out, or hit a merge conflict. Branch preserved for manual review. Run `agentflow retry` to re-attempt. |
+| `escalated` | Not approved after max rounds, timed out, or hit a merge conflict. Branch preserved for manual review. Run `agenthub retry` to re-attempt. |
 | `failed` | Unrecoverable error (agent crash, no changes produced) |
 
 ### Review approach
@@ -107,10 +107,10 @@ It does not flag style, naming, edge cases not in the spec, performance, or "bet
 
 ## Configuration
 
-Global defaults live at `~/.agentflow/config.yaml` (auto-created on first run). You can override per-project by adding `.agentflow.yaml` to your repo root.
+Global defaults live at `~/.agenthub/config.yaml` (auto-created on first run). You can override per-project by adding `.agenthub.yaml` to your repo root.
 
 ```yaml
-# ~/.agentflow/config.yaml
+# ~/.agenthub/config.yaml
 reviewer: codex              # codex | claude | human
 agent: claude                # codex | claude
 max_rounds: 5               # feedback iterations before escalating
@@ -127,7 +127,7 @@ codex_model: o3-mini
 Project-level overrides:
 
 ```yaml
-# your-repo/.agentflow.yaml
+# your-repo/.agenthub.yaml
 reviewer: claude
 max_rounds: 5
 context_files:
@@ -137,10 +137,10 @@ context_files:
 
 ## Logs
 
-Every run is logged to `.agentflow/logs/` in your project directory. Each task gets a folder with the full history: what the agent did, what the reviewer said, how many rounds it took.
+Every run is logged to `.agenthub/logs/` in your project directory. Each task gets a folder with the full history: what the agent did, what the reviewer said, how many rounds it took.
 
 ```
-.agentflow/logs/
+.agenthub/logs/
   20260307_143022/
     plan.json
     fix-granger/
@@ -154,7 +154,7 @@ Every run is logged to `.agentflow/logs/` in your project directory. Each task g
     summary.md
 ```
 
-Add `.agentflow/` to your `.gitignore`.
+Add `.agenthub/` to your `.gitignore`.
 
 ## Requirements
 

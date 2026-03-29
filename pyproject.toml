@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentflow"
+name = "agenthub"
 version = "0.1.0"
 description = "Automated coding agents with built-in code review"
 requires-python = ">=3.11"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-agentflow = "agentflow.cli:main"
+agenthub = "agenthub.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["agentflow*"]
+include = ["agenthub*"]

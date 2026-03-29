@@ -10,7 +10,7 @@ _CODEX_TIMEOUT_SEC = int(os.environ.get("AGENTHUB_CODEX_TIMEOUT_SEC", "300"))
 class CodexAgent(BaseAgent):
     """Coding agent that uses the Codex CLI or falls back to OpenAI API."""
 
-    async def run(self, prompt: str, working_dir: str) -> str:
+    async def run(self, prompt: str, working_dir: str, max_turns: int = 0) -> str:
         codex_bin = shutil.which("codex")
 
         if codex_bin:
@@ -35,13 +35,13 @@ class CodexAgent(BaseAgent):
                 proc.communicate(input=prompt.encode("utf-8")),
                 timeout=_CODEX_TIMEOUT_SEC,
             )
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
             proc.kill()
             try:
                 await proc.communicate()
             except Exception:
                 pass
-            raise RuntimeError(f"Codex agent timed out after {_CODEX_TIMEOUT_SEC}s")
+            raise
 
         output = stdout.decode("utf-8", errors="replace")
 
@@ -60,14 +60,12 @@ class CodexAgent(BaseAgent):
 
         client = AsyncOpenAI()
 
-        # Read the directory structure for context
         import subprocess
         tree = subprocess.run(
             ["git", "ls-files"], cwd=working_dir,
             capture_output=True, text=True
         ).stdout[:3000]
 
-        # Read files mentioned in the prompt context
         system_prompt = (
             "You are a coding agent. You will be given a task and a codebase. "
             "Implement the task by outputting the complete modified files. "
@@ -78,7 +76,7 @@ class CodexAgent(BaseAgent):
         )
 
         response = await client.chat.completions.create(
-            model=os.environ.get("AGENTHUB_CODEX_MODEL", "o3-mini"),
+            model=os.environ.get("AGENTFLOW_CODEX_MODEL", "o3-mini"),
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"CODEBASE FILES:\n{tree}\n\nTASK:\n{prompt}"},
@@ -87,10 +85,7 @@ class CodexAgent(BaseAgent):
         )
 
         output = response.choices[0].message.content or ""
-
-        # Parse and write files
         self._write_files(output, working_dir)
-
         return output
 
     def _write_files(self, output: str, working_dir: str):
@@ -111,7 +106,6 @@ class CodexAgent(BaseAgent):
             try:
                 full_path.relative_to(root)
             except ValueError:
-                # Skip model output that attempts to escape the worktree.
                 continue
 
             full_path.parent.mkdir(parents=True, exist_ok=True)

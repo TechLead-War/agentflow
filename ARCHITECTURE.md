@@ -2,9 +2,9 @@
 
 ## Purpose
 
-`agentflow` is a local orchestration system for breaking a natural-language coding request into tasks, assigning those tasks to coding agents, reviewing the results, and merging approved work back into the current branch.
+`agenthub` is a local orchestration system for breaking a natural-language coding request into tasks, assigning those tasks to coding agents, reviewing the results, and merging approved work back into the current branch.
 
-It is not a hosted service. It runs inside a local git repository, uses local state in `.agentflow/`, and relies on available LLM backends such as the `claude` CLI, the `codex` CLI, or their APIs.
+It is not a hosted service. It runs inside a local git repository, uses local state in `.agenthub/`, and relies on available LLM backends such as the `claude` CLI, the `codex` CLI, or their APIs.
 
 
 ## High-Level Flow
@@ -46,15 +46,15 @@ The orchestration code owns state transitions, batching, retries, merge decision
 
 The CLI supports these user-facing modes:
 
-- `agentflow "task"`
-- `agentflow --prompt-file <path>`
-- `agentflow -` for stdin
-- `agentflow status`
-- `agentflow log`
-- `agentflow resume`
-- `agentflow retry`
-- `agentflow clean`
-- `agentflow config <key> <value>`
+- `agenthub "task"`
+- `agenthub --prompt-file <path>`
+- `agenthub -` for stdin
+- `agenthub status`
+- `agenthub log`
+- `agenthub resume`
+- `agenthub retry`
+- `agenthub clean`
+- `agenthub config <key> <value>`
 
 `status` reads saved run state and renders current progress.
 
@@ -85,8 +85,8 @@ At the end of the run, it attempts to restore the stash.
 Configuration is loaded in three layers:
 
 1. Built-in defaults
-2. Global config at `~/.agentflow/config.yaml`
-3. Project config at `.agentflow.yaml`
+2. Global config at `~/.agenthub/config.yaml`
+3. Project config at `.agenthub.yaml`
 
 Current config surface:
 
@@ -202,7 +202,7 @@ If the researcher fails entirely, planning still proceeds without a brief.
 The planner receives:
 
 - the repository file tree
-- selected context files such as `README.md`, `CLAUDE.md`, `.agentflow.yaml`, and `ARCHITECTURE.md` when present
+- selected context files such as `README.md`, `CLAUDE.md`, `.agenthub.yaml`, and `ARCHITECTURE.md` when present
 - repository import analysis
 - the optional research brief
 - the user request
@@ -452,9 +452,9 @@ If unresolved conflict markers remain, the merge is aborted/reset and the task e
 
 ## State and Logging
 
-Runtime state is stored in `.agentflow/state.json`.
+Runtime state is stored in `.agenthub/state.json`.
 
-Logs are stored in `.agentflow/logs/<run_id>/`.
+Logs are stored in `.agenthub/logs/<run_id>/`.
 
 Persisted run state includes:
 

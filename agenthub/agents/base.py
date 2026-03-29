@@ -6,13 +6,14 @@ class BaseAgent(ABC):
     """Interface for coding agents that implement tasks."""
 
     @abstractmethod
-    async def run(self, prompt: str, working_dir: str) -> str:
+    async def run(self, prompt: str, working_dir: str, max_turns: int = 0) -> str:
         """
         Execute a coding task in the given working directory.
 
         Args:
             prompt: Full task description + any feedback from previous rounds.
             working_dir: Path to the git worktree where the agent should work.
+            max_turns: Maximum number of turns for the agent. 0 means unlimited.
 
         Returns:
             Summary of what the agent did.

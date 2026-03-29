@@ -345,8 +345,9 @@ async def _cmd_run(prompt: str):
                 await merge_all(state, config)
 
                 # --- PHASE: VALIDATING ---
+                merged = [t for t in state.tasks if t.status == TaskStatus.MERGED]
                 final_validation = None
-                if config.validation_enabled:
+                if config.validation_enabled and merged:
                     final_validation = await _run_validation_phase(
                         state, config, prompt, repo_path,
                     )
@@ -448,7 +449,8 @@ async def _cmd_run(prompt: str):
         print(f"{'=' * 50}")
 
         # --- NOTIFY ---
-        notify(state)
+        if config.notify:
+            notify(state)
     finally:
         # Restore stash no matter how the run exits.
         if stashed:
@@ -546,7 +548,8 @@ async def _cmd_resume():
         await merge_all(state, config)
 
     # --- VALIDATION ---
-    if config.validation_enabled:
+    merged_tasks = [t for t in state.tasks if t.status == TaskStatus.MERGED]
+    if config.validation_enabled and merged_tasks:
         final_validation = await _run_validation_phase(
             state, config, state.prompt, repo_path,
         )
@@ -559,14 +562,16 @@ async def _cmd_resume():
             print(f"\n  Branch rolled back. Merged work saved on: {safe_branch}")
             state.finished_at = datetime.now().isoformat()
             save_state(state)
-            notify(state)
+            if config.notify:
+                notify(state)
             return
 
     state.status = "completed"
     state.finished_at = datetime.now().isoformat()
     save_state(state)
 
-    notify(state)
+    if config.notify:
+        notify(state)
     print("Resume complete.")
 
 
@@ -669,8 +674,9 @@ async def _cmd_retry():
             await merge_all(state, config)
 
             # --- VALIDATION ---
+            merged_in_retry = [t for t in state.tasks if t.status == TaskStatus.MERGED]
             final_validation = None
-            if config.validation_enabled:
+            if config.validation_enabled and merged_in_retry:
                 final_validation = await _run_validation_phase(
                     state, config, state.prompt, repo_path,
                 )
@@ -712,7 +718,8 @@ async def _cmd_retry():
         print(f"  To inspect it: git checkout {safe_branch}")
     print(f"{'=' * 50}")
 
-    notify(state)
+    if config.notify:
+        notify(state)
 
 
 def _cmd_clean():

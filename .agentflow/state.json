@@ -1,0 +1,13 @@
+{
+  "run_id": "20260308_180248",
+  "started_at": "2026-03-08T18:02:48.011195",
+  "prompt": "test prompt",
+  "tasks": [],
+  "base_branch": "main",
+  "repo_path": "/Users/primetrace/Desktop/RnD/agentflow",
+  "status": "failed",
+  "phase": "failed",
+  "current_batch": 0,
+  "total_batches": 0,
+  "finished_at": "2026-03-08T18:03:18.656378"
+}

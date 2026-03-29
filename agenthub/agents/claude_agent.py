@@ -1,6 +1,5 @@
 from __future__ import annotations
 import asyncio
-import os
 import shutil
 from .base import BaseAgent
 
@@ -11,18 +10,24 @@ _SECONDS_PER_TURN = int(os.environ.get("AGENTHUB_AGENT_SECS_PER_TURN", "90"))
 class ClaudeAgent(BaseAgent):
     """Coding agent that uses the Claude CLI (claude code)."""
 
-    async def run(self, prompt: str, working_dir: str) -> str:
+    async def run(self, prompt: str, working_dir: str, max_turns: int = 0) -> str:
         claude_bin = shutil.which("claude")
         if not claude_bin:
             raise RuntimeError(
                 "Claude CLI not found. Install it: https://docs.anthropic.com/en/docs/claude-code"
             )
 
-        proc = await asyncio.create_subprocess_exec(
+        args = [
             claude_bin,
             "-p", prompt,
             "--output-format", "text",
             "--dangerously-skip-permissions",
+        ]
+        if max_turns > 0:
+            args.extend(["--max-turns", str(max_turns)])
+
+        proc = await asyncio.create_subprocess_exec(
+            *args,
             cwd=working_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -33,16 +38,13 @@ class ClaudeAgent(BaseAgent):
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=timeout,
             )
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
             proc.kill()
             try:
                 await proc.communicate()
             except Exception:
                 pass
-            raise RuntimeError(
-                f"Claude agent timed out after {timeout}s "
-                f"({self.max_turns} turns × {_SECONDS_PER_TURN}s)"
-            )
+            raise
 
         output = stdout.decode("utf-8", errors="replace")
 

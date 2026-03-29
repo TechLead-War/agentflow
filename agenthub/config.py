@@ -29,10 +29,15 @@ DEFAULTS = {
     "research_enabled": True,
     "research_model": "",
     "research_max_files": 10,
+    "agent_timeout_sec": 0,
+    "reviewer_timeout_sec": 0,
+    "agent_max_turns": 0,
     "validation_enabled": True,
 }
 
-_INT_FIELDS = {"max_rounds", "max_parallel", "review_consistency", "research_max_files"}
+_INT_FIELDS_ALLOW_ZERO = {"agent_timeout_sec", "reviewer_timeout_sec", "agent_max_turns"}
+_INT_FIELDS_MIN_ONE = {"max_rounds", "max_parallel", "review_consistency", "research_max_files"}
+_INT_FIELDS = _INT_FIELDS_ALLOW_ZERO | _INT_FIELDS_MIN_ONE
 _BOOL_FIELDS = {"cleanup_branches", "notify", "research_enabled", "validation_enabled"}
 _ALLOWED_AGENT = {"claude", "codex"}
 _ALLOWED_REVIEWER = {"claude", "codex", "human"}
@@ -55,6 +60,9 @@ class Config:
     codex_model: str = "o3-mini"
     planner_model: str = "claude-sonnet-4-20250514"
     context_files: list[str] = field(default_factory=list)
+    agent_timeout_sec: int = 0
+    reviewer_timeout_sec: int = 0
+    agent_max_turns: int = 0
     prompt_strategy: str = "auto"
     review_consistency: int = 1
     research_enabled: bool = True
@@ -86,10 +94,14 @@ def _coerce_config_value(key: str, value, default):
         except (TypeError, ValueError):
             logger.warning("Invalid int for config '%s': %r. Using default %r.", key, value, default)
             return default
-
-        if number < 1:
-            logger.warning("Config '%s' must be >= 1. Got %r, using default %r.", key, value, default)
-            return default
+        if key in _INT_FIELDS_ALLOW_ZERO:
+            if number < 0:
+                logger.warning("Config '%s' must be >= 0. Got %r, using default %r.", key, value, default)
+                return default
+        else:
+            if number < 1:
+                logger.warning("Config '%s' must be >= 1. Got %r, using default %r.", key, value, default)
+                return default
         return number
 
     if key == "context_files":

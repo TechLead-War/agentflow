@@ -68,10 +68,13 @@ async def merge_all(state: RunState, config: Config):
 
 
 async def _resolve_conflict(task: Task, state: RunState, config: Config) -> bool:
-    """Attempt to auto-resolve a merge conflict using a coding agent."""
+    """Attempt to auto-resolve a merge conflict using a coding agent in a worktree."""
     from .agents import ClaudeAgent, CodexAgent
+    import shutil
 
     repo_path = state.repo_path
+    base_branch = state.base_branch
+
     if config.agent == "codex":
         agent = CodexAgent()
     else:
@@ -79,31 +82,52 @@ async def _resolve_conflict(task: Task, state: RunState, config: Config) -> bool
 
     prompt = PromptBuilder.build_merge_prompt(
         branch=task.branch,
-        base=state.base_branch,
+        base=base_branch,
         title=task.title,
     )
 
-    try:
-        # Need to attempt the merge again to get conflict markers
-        git_ops.run_git(["merge", "--squash", task.branch], cwd=repo_path, check=False)
+    conflict_worktree = str(Path(tempfile.gettempdir()) / f"agenthub-conflict-{task.id}")
 
-        await agent.run(prompt, repo_path)
+    try:
+        if Path(conflict_worktree).exists():
+            git_ops.remove_worktree(conflict_worktree, cwd=repo_path)
+            if Path(conflict_worktree).exists():
+                shutil.rmtree(conflict_worktree, ignore_errors=True)
+            git_ops.prune_worktrees(cwd=repo_path)
+
+        conflict_branch = f"{config.branch_prefix}-conflict-{task.id}"
+        git_ops.delete_branch(conflict_branch, cwd=repo_path, force=True)
+        git_ops.create_branch(conflict_branch, base=base_branch, cwd=repo_path)
+        git_ops.create_worktree(conflict_branch, conflict_worktree, cwd=repo_path)
+
+        git_ops.run_git(
+            ["merge", "--squash", task.branch],
+            cwd=conflict_worktree, check=False,
+        )
+
+        await agent.run(prompt, conflict_worktree)
+
         unresolved = git_ops.run_git(
             ["diff", "--name-only", "--diff-filter=U"],
-            cwd=repo_path,
-            check=False,
+            cwd=conflict_worktree, check=False,
         )
         if unresolved.strip():
-            git_ops.run_git(["merge", "--abort"], cwd=repo_path, check=False)
-            git_ops.run_git(["reset", "--merge"], cwd=repo_path, check=False)
             return False
 
-        git_ops.commit_all(f"agenthub: resolve conflict for {task.id}", cwd=repo_path)
+        git_ops.commit_all(
+            f"agenthub: resolve conflict for {task.id}",
+            cwd=conflict_worktree,
+        )
+
+        git_ops.merge_branch(conflict_branch, cwd=repo_path, squash=True)
         return True
     except Exception:
-        git_ops.run_git(["merge", "--abort"], cwd=repo_path, check=False)
-        git_ops.run_git(["reset", "--merge"], cwd=repo_path, check=False)
         return False
+    finally:
+        git_ops.remove_worktree(conflict_worktree, cwd=repo_path)
+        git_ops.prune_worktrees(cwd=repo_path)
+        conflict_branch_name = f"{config.branch_prefix}-conflict-{task.id}"
+        git_ops.delete_branch(conflict_branch_name, cwd=repo_path, force=True)
 
 
 async def _refresh_branch_before_merge(
@@ -111,10 +135,7 @@ async def _refresh_branch_before_merge(
     state: RunState,
     config: Config,
 ) -> tuple[bool, bool, str | None]:
-    """Rebase an approved branch onto the latest base and re-review if needed.
-
-    Skips re-review when the rebase was a no-op (base hasn't moved), since
-    the diff is identical to the one already approved in the worker loop.
+    """Rebase an approved branch onto the latest base and re-review it.
 
     Returns:
         (ready_to_merge, no_changes_remaining, message)
