@@ -4,7 +4,7 @@ import tempfile
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from .models import Task, TaskStatus, AgentType, TaskComplexity, ReviewDecision, RunState
+from .models import Task, TaskStatus, AgentType, ReviewDecision, RunState
 from .config import Config
 from .prompts import PromptBuilder, PromptStrategy
 from .state import save_state, update_task_status, log_round
@@ -12,22 +12,9 @@ from . import git_ops
 from .agents import ClaudeAgent, CodexAgent
 from .reviewers import CodexReviewer, ClaudeReviewer, HumanReviewer
 
-# Scale agent exploration budget by task complexity.
-# Simple tasks (bugfix, test) need fewer turns; complex ones get more room.
-_COMPLEXITY_MAX_TURNS: dict[TaskComplexity, int] = {
-    TaskComplexity.BUGFIX: 3,
-    TaskComplexity.TEST: 4,
-    TaskComplexity.REFACTOR: 5,
-    TaskComplexity.FEATURE: 6,
-    TaskComplexity.ALGORITHM: 8,
-    TaskComplexity.ARCHITECTURE: 10,
-}
-
-
-def _get_agent(agent_type: AgentType, complexity: TaskComplexity = TaskComplexity.FEATURE):
-    max_turns = _COMPLEXITY_MAX_TURNS.get(complexity, 6)
+def _get_agent(agent_type: AgentType):
     if agent_type == AgentType.CLAUDE:
-        return ClaudeAgent(max_turns=max_turns)
+        return ClaudeAgent()
     return CodexAgent()
 
 
@@ -108,7 +95,7 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
         save_state(state)
         return
 
-    agent = _get_agent(task.agent, task.complexity)
+    agent = _get_agent(task.agent)
     reviewer_type = config.reviewer if config.reviewer == "human" else task.reviewer
     reviewer = _get_reviewer(reviewer_type, consistency_passes=config.review_consistency)
 

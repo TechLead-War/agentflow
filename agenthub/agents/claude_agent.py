@@ -11,9 +11,6 @@ _SECONDS_PER_TURN = int(os.environ.get("AGENTHUB_AGENT_SECS_PER_TURN", "90"))
 class ClaudeAgent(BaseAgent):
     """Coding agent that uses the Claude CLI (claude code)."""
 
-    def __init__(self, max_turns: int = 10):
-        self.max_turns = max_turns
-
     async def run(self, prompt: str, working_dir: str) -> str:
         claude_bin = shutil.which("claude")
         if not claude_bin:
@@ -25,7 +22,6 @@ class ClaudeAgent(BaseAgent):
             claude_bin,
             "-p", prompt,
             "--output-format", "text",
-            "--max-turns", str(self.max_turns),
             "--dangerously-skip-permissions",
             cwd=working_dir,
             stdout=asyncio.subprocess.PIPE,
