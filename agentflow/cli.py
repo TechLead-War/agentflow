@@ -105,6 +105,7 @@ def _read_prompt_stdin() -> str:
 async def _cmd_run(prompt: str):
     from .config import load_config, check_api_keys
     from .planner import plan
+    from .repo_analysis import analyze_repository
     from .scheduler import schedule
     from .worker import run_workers
     from .merger import merge_all
@@ -156,7 +157,8 @@ async def _cmd_run(prompt: str):
                 save_state(state)
 
                 try:
-                    tasks = await plan(prompt, config, repo_path)
+                    repo_analysis = analyze_repository(repo_path)
+                    tasks = await plan(prompt, config, repo_path, analysis=repo_analysis)
                 except Exception as e:
                     state.status = "failed"
                     state.phase = "failed"
@@ -181,7 +183,11 @@ async def _cmd_run(prompt: str):
                 state.phase = "scheduling"
                 save_state(state)
 
-                plan_data = {"prompt": prompt, "tasks": [t.to_dict() for t in tasks]}
+                plan_data = {
+                    "prompt": prompt,
+                    "analysis": repo_analysis.to_dict(),
+                    "tasks": [t.to_dict() for t in tasks],
+                }
                 log_plan(repo_path, state.run_id, plan_data)
 
                 # --- PHASE: SCHEDULING ---

@@ -9,6 +9,7 @@ from .models import Task, TaskComplexity
 from .config import Config
 from .assignment import assign
 from .prompts import PromptBuilder, PromptStrategy, sanitize_input, validate_planner_output
+from .repo_analysis import RepoAnalysis, analyze_repository
 from . import git_ops
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,12 @@ logger = logging.getLogger(__name__)
 PLANNER_TIMEOUT_SEC = int(os.environ.get("AGENTFLOW_PLANNER_TIMEOUT_SEC", "180"))
 
 
-async def plan(prompt: str, config: Config, repo_path: str) -> list[Task]:
+async def plan(
+    prompt: str,
+    config: Config,
+    repo_path: str,
+    analysis: RepoAnalysis | None = None,
+) -> list[Task]:
     """Break a user prompt into structured tasks using an AI planner."""
 
     # Input guardrail: scan for prompt injection
@@ -28,12 +34,14 @@ async def plan(prompt: str, config: Config, repo_path: str) -> list[Task]:
         )
 
     # Gather codebase context
+    analysis = analysis or analyze_repository(repo_path)
     file_tree = git_ops.get_file_tree(cwd=repo_path)
     context_content = _read_context_files(config.context_files, repo_path)
 
     user_message = f"CODEBASE FILES:\n{file_tree}\n\n"
     if context_content:
         user_message += f"KEY FILES:\n{context_content}\n\n"
+    user_message += f"{analysis.to_prompt_context()}\n\n"
     user_message += f"USER REQUEST:\n{prompt}"
 
     # Detect available providers for assignment (CLI or API)
@@ -41,6 +49,9 @@ async def plan(prompt: str, config: Config, repo_path: str) -> list[Task]:
     has_openai = bool(shutil.which("codex")) or bool(os.environ.get("OPENAI_API_KEY"))
 
     raw_tasks = await _call_planner(user_message, config, repo_path)
+    analysis_messages = analysis.apply_task_dependencies(raw_tasks)
+    for message in analysis_messages:
+        logger.info("Planner analysis: %s", message)
 
     # Assign agents and reviewers based on complexity
     tasks: list[Task] = []

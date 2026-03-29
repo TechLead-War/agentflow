@@ -111,7 +111,7 @@ def validate_planner_output(text: str) -> tuple[list[dict], list[str]]:
         return [], ["Planner returned no tasks"]
 
     # Validate each task
-    required_fields = {"id", "title", "spec"}
+    required_fields = {"id", "title", "spec", "files", "depends_on"}
     valid_complexities = {
         "architecture", "algorithm", "feature", "bugfix", "refactor", "test",
     }
@@ -125,8 +125,11 @@ def validate_planner_output(text: str) -> tuple[list[dict], list[str]]:
             errors.append(f"Task '{task_label}' missing required fields: {missing}")
 
         # Type validation
-        if "files" in task and not isinstance(task["files"], list):
-            errors.append(f"Task '{task_label}': 'files' must be a list")
+        if "files" in task:
+            if not isinstance(task["files"], list):
+                errors.append(f"Task '{task_label}': 'files' must be a list")
+            elif not task["files"]:
+                errors.append(f"Task '{task_label}': 'files' should list at least one path")
 
         if "depends_on" in task and not isinstance(task["depends_on"], list):
             errors.append(f"Task '{task_label}': 'depends_on' must be a list")

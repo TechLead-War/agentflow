@@ -18,6 +18,9 @@ Rules:
 - Each task must be implementable independently by a single coding agent
 - MAXIMIZE PARALLELISM: design tasks so they can run simultaneously. The fewer
   dependencies between tasks, the faster the overall execution.
+- USE THE REPO IMPORT ANALYSIS: prefer task boundaries that stay inside the same
+  import neighborhood. If one task edits a module and another edits one of its
+  direct importers, add a dependency or keep them in the same task.
 - MINIMIZE FILE OVERLAP: if two tasks modify the same file, restructure them so
   they touch different files whenever possible. Only add a dependency between tasks
   sharing a file when restructuring is truly impossible.
@@ -46,9 +49,11 @@ For each task, classify complexity as one of:
 PLANNER_COT_REASONING = """
 Think step by step before generating tasks:
 1. Analyze the codebase structure — which files exist, what patterns are used
+   and which files are directly coupled in the import graph
 2. Understand the full scope of the user's request
 3. Identify the minimal set of changes needed
-4. Break changes into independent units that don't overlap on files
+4. Break changes into independent units that don't overlap on files or direct
+   importer/imported module pairs
 5. Order by dependencies — what must exist before other things can be built
 6. For each task, reason about WHY it's needed and what breaks without it"""
 

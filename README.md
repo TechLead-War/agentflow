@@ -56,7 +56,7 @@ agentflow config reviewer claude
 
 ## How it works
 
-1. **Planner** reads your codebase and breaks the task into independent subtasks
+1. **Planner** reads your codebase, builds an internal import graph, and breaks the task into independent subtasks
 2. **Scheduler** figures out which subtasks can run in parallel and which depend on others
 3. **Workers** (one per subtask) each run on a temporary git branch:
    - A coding agent implements the subtask
