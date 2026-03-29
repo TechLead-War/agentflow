@@ -11,6 +11,14 @@ import json
 import logging
 import re
 
+from ..models import (
+    REVIEW_CHECKS,
+    ReviewCheck,
+    ReviewCheckStatus,
+    ReviewDecision,
+    ReviewResult,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -145,26 +153,244 @@ def validate_planner_output(text: str) -> tuple[list[dict], list[str]]:
     return tasks, errors
 
 
-def validate_review_output(text: str) -> tuple[bool, str]:
-    """Validate reviewer output format.
-
-    Returns:
-        (is_valid_format, normalized_content)
-        is_valid_format is True if the output matches LGTM or FEEDBACK: format.
-    """
+def parse_review_output(text: str) -> tuple[ReviewResult, list[str]]:
+    """Parse structured reviewer output, with legacy fallback."""
     stripped = text.strip()
     if not stripped:
-        return False, "Empty review output"
+        return (
+            ReviewResult(
+                approved=False,
+                feedback="Reviewer returned empty output.",
+                decision=ReviewDecision.RETRY,
+                summary="Reviewer returned empty output.",
+                raw_output=text,
+            ),
+            ["Empty review output"],
+        )
 
-    # Check for LGTM
+    normalized = _strip_markdown_fences(stripped)
+    data, json_errors = _extract_json_object(normalized)
+    if data:
+        result, errors = _parse_structured_review(data, raw_output=text)
+        if result.checks:
+            return result, errors
+        json_errors.extend(errors)
+
+    legacy_result = _parse_legacy_review_output(stripped)
+    if legacy_result:
+        return legacy_result, json_errors or ["Used legacy review output parser."]
+
+    return (
+        ReviewResult(
+            approved=False,
+            feedback=stripped,
+            decision=ReviewDecision.RETRY,
+            summary="Reviewer output was not in the expected structured format.",
+            raw_output=text,
+        ),
+        json_errors or ["Reviewer output was not in the expected structured format."],
+    )
+
+
+def validate_review_output(text: str) -> tuple[bool, str]:
+    """Validate reviewer output format."""
+    result, errors = parse_review_output(text)
+    if result.checks or result.decision != ReviewDecision.RETRY or not errors:
+        return True, result.to_log_text()
+    return False, result.feedback or result.to_log_text()
+
+
+def _strip_markdown_fences(text: str) -> str:
+    if text.startswith("```"):
+        lines = text.split("\n")
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return text
+
+
+def _extract_json_object(text: str) -> tuple[dict | None, list[str]]:
+    errors: list[str] = []
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data, []
+        return None, ["Review output JSON must be an object."]
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(text[start:end])
+                if isinstance(data, dict):
+                    return data, []
+                return None, ["Review output JSON must be an object."]
+            except json.JSONDecodeError:
+                errors.append(f"Invalid JSON in review output: {text[:200]}")
+        else:
+            errors.append(f"No JSON found in review output: {text[:200]}")
+    return None, errors
+
+
+def _parse_structured_review(data: dict, *, raw_output: str) -> tuple[ReviewResult, list[str]]:
+    errors: list[str] = []
+    summary = str(data.get("summary", "")).strip()
+    decision = _normalize_review_decision(data.get("decision"))
+    if decision is None:
+        errors.append("Review output missing valid 'decision' (keep|retry|reject).")
+        decision = ReviewDecision.RETRY
+
+    checks_data = data.get("checks")
+    checks = _normalize_review_checks(checks_data, errors)
+
+    fail_count = sum(1 for check in checks if check.status == ReviewCheckStatus.FAIL)
+    if fail_count == 0 and decision != ReviewDecision.KEEP:
+        errors.append("Structured review has no failed checks but decision is not 'keep'.")
+    if fail_count > 0 and decision == ReviewDecision.KEEP:
+        errors.append("Structured review cannot use decision 'keep' when checks failed.")
+
+    approved = decision == ReviewDecision.KEEP and fail_count == 0 and bool(checks)
+    feedback = _format_review_feedback(checks, summary, decision)
+
+    return ReviewResult(
+        approved=approved,
+        feedback=feedback,
+        decision=decision,
+        summary=summary,
+        checks=checks,
+        raw_output=raw_output,
+    ), errors
+
+
+def _normalize_review_checks(checks_data, errors: list[str]) -> list[ReviewCheck]:
+    if not isinstance(checks_data, list):
+        errors.append("Review output missing 'checks' list.")
+        return []
+
+    checks_by_id: dict[str, ReviewCheck] = {}
+    canonical_ids = {check_id for check_id, _ in REVIEW_CHECKS}
+
+    for index, item in enumerate(checks_data):
+        if not isinstance(item, dict):
+            errors.append(f"Review check at index {index} must be an object.")
+            continue
+
+        raw_id = item.get("id")
+        check_id = str(raw_id).strip() if raw_id is not None else ""
+        if not check_id and index < len(REVIEW_CHECKS):
+            check_id = REVIEW_CHECKS[index][0]
+        if check_id not in canonical_ids:
+            errors.append(f"Unknown review check id '{check_id or index}'.")
+            continue
+
+        status = _normalize_review_status(item.get("status"))
+        if status is None:
+            errors.append(f"Review check '{check_id}' has invalid status '{item.get('status')}'.")
+            continue
+
+        details = str(item.get("details", "")).strip()
+        question = dict(REVIEW_CHECKS)[check_id]
+        checks_by_id[check_id] = ReviewCheck(
+            id=check_id,
+            question=question,
+            status=status,
+            details=details,
+        )
+
+    ordered_checks: list[ReviewCheck] = []
+    for check_id, question in REVIEW_CHECKS:
+        check = checks_by_id.get(check_id)
+        if check is None:
+            errors.append(f"Missing review check '{check_id}'.")
+            continue
+        if not check.details:
+            check.details = "No reviewer details provided."
+        ordered_checks.append(check)
+
+    if len(checks_by_id) != len(REVIEW_CHECKS):
+        extra = set(checks_by_id) - {check_id for check_id, _ in REVIEW_CHECKS}
+        if extra:
+            errors.append(f"Unexpected review checks: {sorted(extra)}")
+
+    return ordered_checks
+
+
+def _normalize_review_status(value) -> ReviewCheckStatus | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    aliases = {
+        "pass": ReviewCheckStatus.PASS,
+        "passed": ReviewCheckStatus.PASS,
+        "ok": ReviewCheckStatus.PASS,
+        "yes": ReviewCheckStatus.PASS,
+        "fail": ReviewCheckStatus.FAIL,
+        "failed": ReviewCheckStatus.FAIL,
+        "no": ReviewCheckStatus.FAIL,
+        "not_applicable": ReviewCheckStatus.NOT_APPLICABLE,
+        "not-applicable": ReviewCheckStatus.NOT_APPLICABLE,
+        "na": ReviewCheckStatus.NOT_APPLICABLE,
+        "n/a": ReviewCheckStatus.NOT_APPLICABLE,
+    }
+    return aliases.get(normalized)
+
+
+def _normalize_review_decision(value) -> ReviewDecision | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    aliases = {
+        "keep": ReviewDecision.KEEP,
+        "approve": ReviewDecision.KEEP,
+        "approved": ReviewDecision.KEEP,
+        "lgtm": ReviewDecision.KEEP,
+        "retry": ReviewDecision.RETRY,
+        "revise": ReviewDecision.RETRY,
+        "fix": ReviewDecision.RETRY,
+        "reject": ReviewDecision.REJECT,
+    }
+    return aliases.get(normalized)
+
+
+def _parse_legacy_review_output(text: str) -> ReviewResult | None:
+    stripped = text.strip()
     lines = stripped.split("\n")
     for line in lines:
         if line.strip().upper() == "LGTM":
-            return True, "LGTM"
+            return ReviewResult(
+                approved=True,
+                feedback="",
+                decision=ReviewDecision.KEEP,
+                summary="Legacy reviewer approval.",
+                raw_output=text,
+            )
 
-    # Check for FEEDBACK:
     if "FEEDBACK:" in stripped.upper():
-        return True, stripped
+        idx = stripped.upper().index("FEEDBACK:")
+        feedback = stripped[idx + len("FEEDBACK:"):].strip()
+        return ReviewResult(
+            approved=False,
+            feedback=feedback,
+            decision=ReviewDecision.RETRY,
+            summary="Legacy reviewer requested changes.",
+            raw_output=text,
+        )
 
-    # Ambiguous format — still usable but not the expected format
-    return False, stripped
+    return None
+
+
+def _format_review_feedback(
+    checks: list[ReviewCheck],
+    summary: str,
+    decision: ReviewDecision,
+) -> str:
+    lines = [f"Decision: {decision.value}"]
+    if summary:
+        lines.append(f"Summary: {summary}")
+    for index, check in enumerate(checks, 1):
+        detail = check.details or "No reviewer details provided."
+        lines.append(
+            f"{index}. {check.question} [{check.status.value}] {detail}"
+        )
+    return "\n".join(lines)

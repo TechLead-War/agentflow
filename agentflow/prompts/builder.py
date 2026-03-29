@@ -94,16 +94,19 @@ class PromptBuilder:
                 + "\n".join(f"  - {f}" for f in task.files)
             )
 
+        parts.append(templates.AGENT_SYSTEM_UNDERSTANDING)
+        parts.append(templates.AGENT_QUALITY_BAR)
+
         # ── Strategy-specific sections ──
         if round_num > 1 and feedback:
             # Feedback rounds: always use CoT to reason through fixes
             parts.append(templates.AGENT_FEEDBACK_COT)
             parts.append(
                 f"\n# Review Feedback (Round {round_num - 1})\n"
-                f"The reviewer found issues with your previous implementation. "
-                f"Focus ONLY on fixing the blocker issues below. "
-                f"Ignore suggestions or style nits — only fix what would cause "
-                f"bugs, break the build, or violate the task requirements:\n\n{feedback}"
+                f"The reviewer returned an 8-check review of your previous implementation. "
+                f"Fix every check marked `fail`. Preserve checks that already passed. "
+                f"If the decision is `reject`, revisit the approach rather than making a cosmetic patch.\n\n"
+                f"{feedback}"
             )
         elif round_num == 1:
             # First round: apply strategy-specific reasoning prefix

@@ -4,7 +4,7 @@ import tempfile
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from .models import Task, TaskStatus, AgentType, RunState, ReviewResult
+from .models import Task, TaskStatus, AgentType, ReviewDecision, RunState
 from .config import Config
 from .prompts import PromptBuilder, PromptStrategy
 from .state import save_state, update_task_status, log_round
@@ -177,17 +177,21 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
 
             # --- STALE FEEDBACK DETECTION ---
             # If the diff hasn't meaningfully changed from last round, the agent
-            # is stuck in a loop. Auto-approve to avoid wasting cycles.
+            # is stuck in a loop. Escalate instead of auto-approving a bad change.
             if previous_diff and round_num > 1:
                 similarity = SequenceMatcher(None, previous_diff, diff).ratio()
                 if similarity > 0.95:
                     log_round(repo_path, state.run_id, task.id, round_num, "review",
                               f"Stale loop detected (diff similarity: {similarity:.0%}). "
-                              f"Auto-approving to prevent spin.")
-                    task.status = TaskStatus.APPROVED
+                              f"Escalating to prevent repeated retries.")
+                    task.status = TaskStatus.ESCALATED
                     task.feedback = (
-                        f"Auto-approved: agent made no meaningful progress after round "
+                        f"Escalated: agent made no meaningful progress after round "
                         f"{round_num - 1}. Diff similarity {similarity:.0%}."
+                    )
+                    task.error = (
+                        f"Stale retry loop detected on round {round_num}. "
+                        "Branch preserved for manual review."
                     )
                     save_state(state)
                     return
@@ -201,13 +205,18 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
                     previous_feedback=feedback,
                 )
             except Exception as e:
-                # Reviewer failed — treat as approved to avoid blocking
                 log_round(repo_path, state.run_id, task.id, round_num, "review",
-                          f"Reviewer error: {e}. Auto-approving.")
-                result = ReviewResult(approved=True, feedback=f"Reviewer error: {e}")
+                          f"Reviewer error: {e}. Escalating for manual review.")
+                task.status = TaskStatus.ESCALATED
+                task.error = (
+                    f"Reviewer error on round {round_num}: {e}. "
+                    "Branch preserved for manual review."
+                )
+                save_state(state)
+                return
 
             log_round(repo_path, state.run_id, task.id, round_num, "review",
-                      f"{'LGTM' if result.approved else 'FEEDBACK:'}\n{result.feedback}")
+                      result.to_log_text())
 
             if result.approved:
                 task.status = TaskStatus.APPROVED
@@ -215,12 +224,12 @@ async def _run_single_worker(task: Task, config: Config, state: RunState):
                 save_state(state)
                 return
 
-            # --- CHECK: only blockers should cause another round ---
-            if round_num > 1 and not _has_blockers(result.feedback):
-                # Only suggestions remain on round 2+, good enough to merge
-                log_round(repo_path, state.run_id, task.id, round_num, "review",
-                          "Only suggestions remain after round 1. Auto-approving.")
-                task.status = TaskStatus.APPROVED
+            if result.decision == ReviewDecision.REJECT:
+                task.status = TaskStatus.ESCALATED
+                task.error = (
+                    f"Reviewer rejected the change on round {round_num}. "
+                    "Branch preserved for manual review."
+                )
                 task.feedback = result.feedback
                 save_state(state)
                 return
@@ -255,49 +264,6 @@ def _get_strategy_override(config: Config) -> PromptStrategy | None:
         return PromptStrategy(raw)
     except ValueError:
         return None
-
-
-def _has_blockers(feedback: str) -> bool:
-    """Check if the feedback contains any blocker-severity issues."""
-    if not feedback:
-        return False
-    text = feedback.lower()
-    # Look for explicit blocker markers
-    if "blocker" in text:
-        return True
-    # Look for severity indicators that suggest blocking issues
-    blocking_phrases = (
-        # Crash / break indicators
-        "will crash", "will break", "will fail", "would crash", "would break",
-        "would fail", "causes crash", "causes failure",
-        # Compilation / syntax
-        "syntax error", "compilation error", "compile error", "won't compile",
-        "does not compile", "parse error",
-        # Runtime errors
-        "runtime error", "throws exception", "unhandled exception",
-        "stack overflow", "infinite loop", "deadlock",
-        # Security
-        "security vulnerability", "sql injection", "xss", "path traversal",
-        "command injection", "insecure",
-        # Reference errors
-        "missing import", "undefined variable", "undefined function",
-        "undeclared", "not defined", "name error", "reference error",
-        "module not found", "import error",
-        # Type errors
-        "type error", "type mismatch", "wrong type", "incompatible type",
-        # Null / bounds
-        "null pointer", "nil pointer", "none type", "nonetype",
-        "index out of", "out of bounds", "key error", "index error",
-        # Logic errors
-        "incorrect logic", "wrong result", "incorrect result",
-        "logic error", "off-by-one", "data loss", "data corruption",
-        "race condition",
-        # Explicit severity
-        "must fix", "critical", "severity: blocker", "breaking change",
-        "this won't work", "this doesn't work", "this is broken",
-        "fundamentally wrong", "completely wrong",
-    )
-    return any(phrase in text for phrase in blocking_phrases)
 
 
 def _agent_output_indicates_noop_complete(agent_output: str) -> bool:

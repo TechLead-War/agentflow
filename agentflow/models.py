@@ -32,6 +32,30 @@ class TaskComplexity(Enum):
     TEST = "test"
 
 
+class ReviewCheckStatus(Enum):
+    PASS = "pass"
+    FAIL = "fail"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class ReviewDecision(Enum):
+    KEEP = "keep"
+    RETRY = "retry"
+    REJECT = "reject"
+
+
+REVIEW_CHECKS: tuple[tuple[str, str], ...] = (
+    ("run_build", "Does it run/build correctly?"),
+    ("task_fit", "Does it solve the actual requested task?"),
+    ("scope_regressions", "Did it stay within scope and avoid regressions?"),
+    ("logic_edge_cases", "Is the logic correct, including edge cases and failure cases?"),
+    ("code_quality", "Is the code/design quality acceptable?"),
+    ("approach_justified", "Is the chosen approach justified versus alternatives?"),
+    ("metric_improvement", "Did the target metric actually improve?"),
+    ("change_decision", "Should we keep, reject, or retry this change?"),
+)
+
+
 @dataclass
 class Task:
     id: str
@@ -100,9 +124,40 @@ class Batch:
 
 
 @dataclass
+class ReviewCheck:
+    id: str
+    question: str
+    status: ReviewCheckStatus
+    details: str = ""
+
+
+@dataclass
 class ReviewResult:
     approved: bool
     feedback: str = ""
+    decision: ReviewDecision = ReviewDecision.KEEP
+    summary: str = ""
+    checks: list[ReviewCheck] = field(default_factory=list)
+    raw_output: str = ""
+
+    def to_log_text(self) -> str:
+        lines = [
+            f"DECISION: {self.decision.value}",
+            f"APPROVED: {'yes' if self.approved else 'no'}",
+        ]
+        if self.summary:
+            lines.append(f"SUMMARY: {self.summary}")
+        if self.checks:
+            lines.append("CHECKS:")
+            for index, check in enumerate(self.checks, 1):
+                line = f"{index}. {check.question} [{check.status.value}]"
+                if check.details:
+                    line += f" {check.details}"
+                lines.append(line)
+        elif self.feedback:
+            lines.append("FEEDBACK:")
+            lines.append(self.feedback)
+        return "\n".join(lines)
 
 
 @dataclass

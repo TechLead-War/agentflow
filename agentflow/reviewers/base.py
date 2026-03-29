@@ -1,6 +1,10 @@
 from __future__ import annotations
+import logging
 from abc import ABC, abstractmethod
+from ..prompts import parse_review_output
 from ..models import ReviewResult
+
+logger = logging.getLogger(__name__)
 
 
 class BaseReviewer(ABC):
@@ -22,3 +26,9 @@ class BaseReviewer(ABC):
             ReviewResult with approved=True or feedback text.
         """
         ...
+
+    def _parse_review_text(self, text: str) -> ReviewResult:
+        result, errors = parse_review_output(text)
+        if errors:
+            logger.warning("Review output parse warnings: %s", errors)
+        return result

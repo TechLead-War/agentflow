@@ -3,8 +3,9 @@ import asyncio
 import logging
 import os
 import shutil
+from collections import Counter
 from .base import BaseReviewer
-from ..models import ReviewResult
+from ..models import ReviewDecision, ReviewResult
 from ..prompts import PromptBuilder, PromptStrategy
 
 logger = logging.getLogger(__name__)
@@ -56,16 +57,27 @@ class ClaudeReviewer(BaseReviewer):
         majority_approved = approvals > len(valid_results) / 2
 
         if majority_approved:
-            return ReviewResult(approved=True, feedback="")
+            for result in valid_results:
+                if result.approved:
+                    return result
 
-        # Aggregate feedback from rejecting reviews
-        all_feedback = [r.feedback for r in valid_results if not r.approved and r.feedback]
-        merged = "\n---\n".join(all_feedback) if all_feedback else ""
+        decisions = Counter(r.decision for r in valid_results if not r.approved)
+        if decisions:
+            top_count = max(decisions.values())
+            candidates = [
+                decision for decision, count in decisions.items()
+                if count == top_count
+            ]
+            preferred = ReviewDecision.REJECT if ReviewDecision.REJECT in candidates else candidates[0]
+            for result in valid_results:
+                if not result.approved and result.decision == preferred:
+                    return result
+
         logger.info(
-            "Self-consistency: %d/%d approved, using aggregated feedback",
+            "Self-consistency: %d/%d approved, using first non-approved structured result",
             approvals, len(valid_results),
         )
-        return ReviewResult(approved=False, feedback=merged)
+        return valid_results[0]
 
     async def _single_review(self, task_spec: str, diff: str, round_num: int,
                               previous_feedback: str | None = None) -> ReviewResult:
@@ -138,37 +150,4 @@ class ClaudeReviewer(BaseReviewer):
         return self._parse_response(text)
 
     def _parse_response(self, text: str) -> ReviewResult:
-        stripped = text.strip()
-        upper = stripped.upper()
-        lines = stripped.split("\n")
-
-        # Check for explicit LGTM
-        for line in lines:
-            if line.strip().upper() == "LGTM":
-                return ReviewResult(approved=True, feedback="")
-
-        # Check for common approval phrases the reviewer might use instead of LGTM
-        approval_phrases = (
-            "lgtm", "looks good", "approved", "no issues", "no blockers",
-            "ship it", "good to merge", "ready to merge", "no problems found",
-            "no bugs found", "code is correct", "implementation is correct",
-            "changes look good", "looks correct", "well implemented",
-        )
-        # Only match if there's no FEEDBACK: section (which would indicate rejection)
-        if "FEEDBACK:" not in upper:
-            lower = stripped.lower()
-            for phrase in approval_phrases:
-                if phrase in lower:
-                    # Make sure it's not negated (e.g., "does not look good")
-                    idx = lower.index(phrase)
-                    prefix = lower[max(0, idx - 15):idx]
-                    if not any(neg in prefix for neg in ("not ", "no ", "don't ", "doesn't ", "isn't ")):
-                        return ReviewResult(approved=True, feedback="")
-
-        # Extract structured feedback
-        if "FEEDBACK:" in upper:
-            idx = upper.index("FEEDBACK:")
-            feedback = stripped[idx + len("FEEDBACK:"):].strip()
-            return ReviewResult(approved=False, feedback=feedback)
-
-        return ReviewResult(approved=False, feedback=stripped)
+        return self._parse_review_text(text)
