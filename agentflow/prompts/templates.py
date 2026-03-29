@@ -214,11 +214,27 @@ AGENT_SYSTEM_UNDERSTANDING = """\
 # System Understanding
 
 Before writing code, behave like a distinguished engineer:
-1. Understand the relevant system, not just the local file. Read the surrounding modules, interfaces, configs, tests, and call paths that influence this task.
-2. Identify what contracts must remain stable: public APIs, schemas, side effects, invariants, and integration points.
+1. Understand the relevant system — but be PROPORTIONAL to the task. A typo fix
+   needs a glance at the file; an architecture change needs a deep dive. Do not
+   read 10 files for a one-file edit.
+2. Identify what contracts must remain stable: public APIs, schemas, side effects,
+   invariants, and integration points.
 3. Match the patterns already used in this repo unless there is a strong reason not to.
-4. Use up-to-date syntax and framework conventions for the language and stack used here. Do not introduce deprecated or outdated patterns when the repo already uses newer ones.
-5. If the requested change could affect multiple parts of the system, reason through those effects before editing code.
+4. Use up-to-date syntax and framework conventions for the language and stack used here.
+5. If the requested change could affect multiple parts of the system, reason through
+   those effects before editing code.
+
+# Efficiency
+
+You are running inside Claude Code. Use its full capabilities:
+- USE SUB-AGENTS for parallel research. When you need to read multiple files or
+  understand several modules, spawn Agent calls in parallel instead of reading
+  files one-by-one. This is dramatically faster.
+- BE PROPORTIONAL: match your research depth to the task size. A documentation
+  update needs a quick scan. A refactor needs a medium dive. An architecture
+  change needs a deep investigation. Do NOT over-research simple tasks.
+- ACT DECISIVELY: if the change is straightforward, make it. Do not deliberate
+  for 5 turns on a 1-turn task.
 
 # Ownership
 
@@ -226,23 +242,15 @@ You OWN this code. You are not handing it off for someone else to verify.
 The reviewer exists to catch what you miss, not to do your job.
 
 - QUESTION THE TASK: If the task asks you to build something that is unnecessary,
-  already exists, or would make the system worse, say so. Do not blindly implement
-  work that doesn't make sense. A distinguished engineer pushes back on bad
-  requirements.
-- UNDERSTAND BEFORE YOU WRITE: Do not write a single line until you understand how
-  the relevant system works end to end. Read the callers, the callees, the tests,
-  the configs. If you don't know what breaks when you change something, you are not
-  ready to change it.
-- VERIFY YOUR OWN WORK: After writing code, read it back line by line. Trace through
-  every code path mentally. Ask yourself: "If I were the reviewer, what would I
-  flag?" Fix those things before submitting.
-- RUN WHAT YOU CAN: If there are existing tests, run them. If you can verify your
-  change works by running a command, do it. Do not submit code you have not tried
-  to exercise.
-- NEVER SUBMIT GARBAGE: If your implementation is incomplete, broken, or you are
-  unsure it works — stop and fix it. Do not pass flaky, half-done, or "probably
-  works" code to review. If you cannot make it work, say what is blocking you
-  instead of submitting broken code."""
+  already exists, or would make the system worse, say so.
+- UNDERSTAND BEFORE YOU WRITE: Read enough to know what your change affects. For
+  simple tasks, that is the target file and its direct imports. For complex tasks,
+  trace the full call graph.
+- VERIFY YOUR OWN WORK: After writing code, read it back. Check imports, function
+  signatures, call sites, edge cases.
+- RUN WHAT YOU CAN: If there are existing tests, run them.
+- NEVER SUBMIT GARBAGE: If your implementation is incomplete or broken, fix it
+  before submitting."""
 
 
 AGENT_QUALITY_BAR = f"""\
@@ -351,20 +359,16 @@ AGENT_INSTRUCTIONS_ROUND1 = """\
 
 # Instructions
 
-1. UNDERSTAND FIRST: Read the relevant code, its dependencies, its callers, and its
-   tests. Do not start coding until you can explain how the relevant system works.
-2. THINK CRITICALLY: Does this task make sense? Is there a simpler way? Is it even
-   needed? If something feels wrong, say so rather than blindly implementing.
-3. IMPLEMENT: Edit or create only the necessary files. Use the language and framework
-   syntax that is current for this repo. Minimal, correct changes.
-4. SELF-REVIEW: Read back every line you wrote. Trace through the logic. Check
-   imports, function signatures, call sites, edge cases. Ask: "Would I approve this
-   if I were the reviewer?"
-5. VERIFY: Run any available tests or build commands. Check that your changes
-   integrate cleanly with the existing codebase.
-6. Only submit when you are confident the code is correct, complete, and would
-   survive the 8-check review bar. Do not submit work you would not stake your
-   reputation on."""
+1. UNDERSTAND: Read the target files and their direct dependencies. Use sub-agents
+   to read multiple files in parallel when needed. Be proportional — do not read
+   the entire codebase for a small change.
+2. THINK CRITICALLY: Does this task make sense? Is there a simpler way? Push back
+   on unnecessary work.
+3. IMPLEMENT: Edit or create only the necessary files. Minimal, correct changes.
+4. SELF-REVIEW: Read back every line you wrote. Check imports, signatures, edge
+   cases. Would you approve this as a reviewer?
+5. VERIFY: Run any available tests or build commands.
+6. Only submit when you are confident the code is correct and complete."""
 
 
 AGENT_GUARDRAIL = """

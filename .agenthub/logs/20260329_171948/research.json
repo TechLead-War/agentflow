@@ -1,0 +1,11 @@
+{
+  "gate": {
+    "is_complex": false,
+    "confidence": 0.75,
+    "reason": "LLM classified as SIMPLE.",
+    "signals": [
+      "llm_classification"
+    ]
+  },
+  "brief": null
+}

@@ -15,8 +15,19 @@ ASSIGNMENT_MATRIX: dict[TaskComplexity, tuple[AgentType, AgentType]] = {
 }
 
 
-def assign(complexity: TaskComplexity, has_anthropic: bool, has_openai: bool) -> tuple[AgentType, AgentType]:
-    """Pick agent and reviewer based on task complexity and available API keys."""
+def assign(
+    complexity: TaskComplexity,
+    has_anthropic: bool,
+    has_openai: bool,
+    config_agent: str = "",
+    config_reviewer: str = "",
+) -> tuple[AgentType, AgentType]:
+    """Pick agent and reviewer based on config, then complexity matrix as fallback.
+
+    If the user explicitly configured an agent/reviewer in config.yaml, respect
+    that choice. The complexity matrix is only used when no explicit config exists.
+    """
+    # Start with the complexity-based matrix
     agent, reviewer = ASSIGNMENT_MATRIX[complexity]
 
     # If only one API is available, use it for both roles
@@ -24,5 +35,18 @@ def assign(complexity: TaskComplexity, has_anthropic: bool, has_openai: bool) ->
         return AgentType.CLAUDE, AgentType.CLAUDE
     if has_openai and not has_anthropic:
         return AgentType.CODEX, AgentType.CODEX
+
+    # User's explicit config overrides the matrix
+    if config_agent and config_agent != "auto":
+        try:
+            agent = AgentType(config_agent)
+        except ValueError:
+            pass
+
+    if config_reviewer and config_reviewer not in ("auto", "human"):
+        try:
+            reviewer = AgentType(config_reviewer)
+        except ValueError:
+            pass
 
     return agent, reviewer

@@ -60,7 +60,10 @@ async def plan(
     tasks: list[Task] = []
     for raw in raw_tasks:
         complexity = TaskComplexity(raw.get("complexity", "feature"))
-        agent, reviewer = assign(complexity, has_anthropic, has_openai)
+        agent, reviewer = assign(
+            complexity, has_anthropic, has_openai,
+            config_agent=config.agent, config_reviewer=config.reviewer,
+        )
 
         task = Task(
             id=raw["id"],
